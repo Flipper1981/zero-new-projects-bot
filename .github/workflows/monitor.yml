@@ -1,0 +1,4 @@
+name: Flipper Zero Bot
+on:
+  schedule:
+    - cron
