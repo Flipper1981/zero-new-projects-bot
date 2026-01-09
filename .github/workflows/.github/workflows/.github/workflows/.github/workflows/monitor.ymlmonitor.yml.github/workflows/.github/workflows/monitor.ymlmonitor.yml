@@ -1,0 +1,18 @@
+name: Flipper Zero Bot
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Alle 30 Min
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps
+name: Flipper Zero Bot
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Alle 30 Min
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps
