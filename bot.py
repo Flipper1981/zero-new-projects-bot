@@ -1,117 +1,155 @@
 import requests
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-# Secrets
+# Secrets aus GitHub Actions holen
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHANNEL = os.environ["CHANNEL_ID"]
 
-# State-Datei (speichert letzte bekannte Release pro Repo)
-STATE_FILE = "/tmp/flipper_release_state.json"
+# State-Datei für letzte Checks / Releases
+STATE_FILE = "/tmp/flipper_state.json"
 
-# Liste der wichtigsten Flipper-Repos (erweitere bei Bedarf!)
+# Liste der Top-Repos für Release-Überwachung (erweiterbar)
 WATCHED_REPOS = [
     "DarkFlippers/unleashed-firmware",
     "RogueMaster/flipperzero-firmware-wPlugins",
     "Next-Flip/Momentum-Firmware",
     "Flipper-XFW/Xtreme-Firmware",
-    "Flipper-Devices/flipperzero-firmware",  # offiziell
-    "djsime1/awesome-flipperzero",           # Liste, könnte Updates haben
-    # Füge hier eigene hinzu, z.B. "username/dein-projekt"
+    "Flipper-Devices/flipperzero-firmware",
+    "djsime1/awesome-flipperzero",
+    "xMasterX/all-the-plugins"
 ]
 
-# Hilfsfunktion: Lade gespeicherten State
 def load_state():
     try:
         with open(STATE_FILE, 'r') as f:
             return json.load(f)
     except:
-        return {}  # leer beim ersten Mal
+        return {"last_repo_check": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(), "releases": {}}
 
-# Hilfsfunktion: Speichere neuen State
 def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-def check_releases():
-    state = load_state()
-    new_posts = []
+def check_new_repos(state):
+    since = datetime.fromisoformat(state["last_repo_check"]).strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    # Verfeinerte Suche: Keywords + Topics, Forks ausschließen, relevant für Flipper (Apps, Firmware, Plugins)
+    query = (
+        "(flipper zero OR flipper-zero OR flipperzero) "
+        "(fap OR .fap OR plugin OR firmware OR app OR custom OR unleashed OR rogue OR momentum OR xtreme OR subghz OR nfc OR rfid OR badusb OR ibutton OR gpio OR ir) "
+        "-is:fork -fork:true "  # Forks ausschließen
+        "created:>" + since
+    )
+    url = f"https://api.github.com/search/repositories?q={query}&sort=created&order=desc&per_page=15"
+    
+    print(f"Repo-Suche: {query}")
+    print(f"URL: {url}")
+    
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        print(f"Gefundene neue Repos: {len(items)}")
+        return items
+    except Exception as e:
+        print("Repo-API Fehler:", str(e))
+        return []
 
+def check_new_releases(state):
+    new_releases = []
+    releases_state = state["releases"]
+    
     for repo in WATCHED_REPOS:
-        url = f"https://api.github.com/repos/{repo}/releases?per_page=5"  # max 5 neueste holen
-        headers = {"Accept": "application/vnd.github.v3+json"}
-
+        url = f"https://api.github.com/repos/{repo}/releases?per_page=3"
         try:
-            resp = requests.get(url, headers=headers, timeout=12)
-            resp.raise_for_status()
-            releases = resp.json()
+            releases = requests.get(url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=10).json()
+            if not releases:
+                continue
+            
+            latest = releases[0]
+            tag = latest["tag_name"]
+            last_tag = releases_state.get(repo, None)
+            
+            if last_tag != tag:
+                new_releases.append(latest)
+                releases_state[repo] = tag
+                print(f"Neuer Release in {repo}: {tag}")
         except Exception as e:
-            print(f"Fehler bei {repo}: {e}")
-            continue
+            print(f"Release-Fehler bei {repo}: {e}")
+    
+    state["releases"] = releases_state
+    return new_releases
 
-        if not releases:
-            print(f"Keine Releases in {repo}")
-            continue
+def post_findings(items, new_releases):
+    sent = 0
+    # Zuerst Repos posten
+    for repo in items:
+        if sent >= 4:
+            break
+        created = repo["created_at"][:10]
+        name = repo["full_name"]
+        url_repo = repo["html_url"]
+        desc = (repo["description"] or "Keine Beschreibung").strip()[:140]
+        stars = repo["stargazers_count"]
+        
+        message = f"""🆕 <b>Neues Flipper-Projekt: {name}</b>
+⭐ {stars} • {created}
+{desc}
 
-        latest = releases[0]  # neueste ist immer zuerst
-        tag = latest["tag_name"]
-        published_at = latest["published_at"]
-        name = latest["name"] or tag
-        body = latest["body"] or "Keine Beschreibung"
-        if len(body) > 200:
-            body = body[:197] + "..."
-
-        # Letzte bekannte für dieses Repo
-        last_tag = state.get(repo, {}).get("last_tag")
-
-        if last_tag != tag:
-            # Neu!
-            message = f"""🆕 <b>Update in {repo}!</b>
-
+{url_repo}"""
+        
+        send_message(message)
+        sent += 1
+    
+    # Dann Releases posten
+    for release in new_releases:
+        if sent >= 4:
+            break
+        repo = release["repository_url"].split('/repos/')[1]
+        tag = release["tag_name"]
+        published = release["published_at"][:10]
+        name = release["name"] or tag
+        body = (release["body"] or "Keine Beschreibung")[:200] + "..."
+        
+        message = f"""🆕 <b>Neuer Release in {repo}!</b>
 <b>{name}</b> ({tag})
-📅 {published_at[:10]}
-{body[:200]}...
+📅 {published}
+{body}
 
-🔗 {latest["html_url"]}"""
+{release["html_url"]}"""
+        
+        send_message(message)
+        sent += 1
 
-            new_posts.append(message)
+def send_message(message):
+    send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHANNEL,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
+    }
+    try:
+        r = requests.post(send_url, json=payload, timeout=10)
+        r.raise_for_status()
+        print("Gesendet: " + message.splitlines()[0])
+    except Exception as e:
+        print("Telegram Fehler:", str(e))
 
-            # State updaten
-            state[repo] = {"last_tag": tag, "last_published": published_at}
-
-    if new_posts:
-        sent = 0
-        for msg in new_posts:
-            if sent >= 3:  # max 3 pro Lauf
-                break
-            payload = {
-                "chat_id": TELEGRAM_CHANNEL,
-                "text": msg,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False
-            }
-            try:
-                r = requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json=payload,
-                    timeout=10
-                )
-                r.raise_for_status()
-                print("Gesendet Update aus:", msg.splitlines()[1])
-                sent += 1
-            except Exception as e:
-                print("Telegram Fehler:", e)
-
-    # State speichern
-    save_state(state)
-
-    if not new_posts:
-        print("Keine neuen Releases gefunden")
-
-    print("Check beendet")
-
-
-if __name__ == "__main__":
-    print("Release-Check startet...")
-    check_releases()
+def check_flipper_updates():
+    state = load_state()
+    
+    # Neue Repos checken
+    new_repos = check_new_repos(state)
+    
+    # Neue Releases checken
+    new_releases = check_new_releases(state)
+    
+    # Posten, wenn etwas Neues da ist
+    post_findings(new_repos, new_releases)
+    
+    # State
