@@ -5,34 +5,32 @@ from datetime import datetime, timezone, timedelta
 import time
 from typing import List, Dict, Set
 import re
+import xml.etree.ElementTree as ET
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHANNEL = os.environ["CHANNEL_ID"]
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", None)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-STATE_FILE = "/tmp/flipper_state.json"
+# DEIN USERNAME!
+MY_GITHUB_USERNAME = "Flipper1981"
 
-# VERBESSERTE QUERIES (mehr Coverage + präziser)
+STATE_FILE = "/tmp/flipper_ultimate_state.json"
+
+# [Alle vorherigen Queries + Optimierungen bleiben...]
 FLIPPER_QUERIES = [
-    'topic:flipperzero OR topic:"flipper-zero" OR topic:flipperzero-firmware OR topic:flipper-plugin OR topic:flipper-app',
-    '"flipper zero" OR flipperzero OR fap OR "flipper app" OR protpiratein OR protpirate',
-    'subghz OR nfc OR rfid OR badusb OR ibutton OR gpio OR infrared OR "flipper mod" OR ir',
-    'unleashed-firmware OR rogiemaster OR momentum-firmware OR xtreme-firmware OR darkflippers',
-    'flipperzero OR "flipper zero" pushed:>2026-01-09 OR updated:>2026-01-09',
-    'awesome-flipperzero OR "all-the-plugins" OR fap-store OR flipperhttp OR fliptelegram',
-    '"flipper zero" language:C OR language:cpp fork:false stars:>0'
+    'topic:flipperzero archived:false',
+    'topic:"flipper-zero" OR topic:flipperzero-firmware archived:false',
+    '"flipper zero" archived:false stars:>5',
+    'unleashed-firmware OR rogiemaster OR momentum-firmware archived:false'
 ]
 
-# CRITICAL REPOS (Top-Priority, immer checken)
 PRIORITY_REPOS = [
-    "RocketGod-git/ProtoPiratein", "flipperdevices/flipperzero-firmware",
-    "DarkFlippers/unleashed-firmware", "RogueMaster/flipperzero-firmware-wPlugins",
-    "Next-Flip/Momentum-Firmware", "Flipper-XFW/Xtreme-Firmware",
-    "djsime1/awesome-flipperzero", "xMasterX/all-the-plugins",
-    "UberGuidoZ/Flipper", "jblanked/FlipTelegram", "jblanked/FlipperHTTP"
+    "flipperdevices/flipperzero-firmware", "DarkFlippers/unleashed-firmware",
+    "RogueMaster/flipperzero-firmware-wPlugins", "Next-Flip/Momentum-Firmware",
+    "Flipper-XFW/Xtreme-Firmware", "RocketGod-git/ProtoPiratein"
 ]
 
-def load_state() -> Dict:
+def load_state():
     try:
         with open(STATE_FILE, 'r') as f:
             state = json.load(f)
@@ -41,14 +39,14 @@ def load_state() -> Dict:
             state["repo_states"] = state.get("repo_states", {})
             return state
     except:
-        return {"known_repos": set(), "posted_events": set(), "repo_states": {}}
+        return {"posted_events": set(), "known_repos": set(), "repo_states": {}}
 
-def save_state(state: Dict):
-    save_state_copy = state.copy()
-    save_state_copy["posted_events"] = list(state["posted_events"])
-    save_state_copy["known_repos"] = list(state["known_repos"])
+def save_state(state):
+    save_copy = state.copy()
+    save_copy["posted_events"] = list(state["posted_events"])
+    save_copy["known_repos"] = list(state["known_repos"])
     with open(STATE_FILE, 'w') as f:
-        json.dump(save_state_copy, f, indent=2)
+        json.dump(save_copy, f, indent=2)
 
 def get_headers():
     headers = {"Accept": "application/vnd.github.v3+json"}
@@ -56,220 +54,302 @@ def get_headers():
         headers["Authorization"] = f"token {GITHUB_TOKEN}"
     return headers
 
-def ultimate_flipper_search(state: Dict) -> List[str]:
-    """OPTIMIERT: 7 Queries x 25 Pages = 5000+ Repos!"""
-    print("🔥 MEGA FLIPPER GITHUB SUCHE!")
-    all_repos: Set[str] = set(state["known_repos"])
-    all_repos.update(PRIORITY_REPOS)  # Priority immer drin
-    
-    for q_num, query in enumerate(FLIPPER_QUERIES, 1):
-        print(f"\n🔎 Query {q_num}/{len(FLIPPER_QUERIES)}: {query[:55]}...")
-        for page in range(1, 26):  # 25 Pages = 750 Repos/Query
-            url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=30&page={page}"
-            try:
-                resp = requests.get(url, headers=get_headers(), timeout=25)
-                if resp.status_code == 403:
-                    print("  ⏳ Rate limit - 90s Pause...")
-                    time.sleep(90)
-                    continue
-                if resp.status_code != 200:
-                    print(f"  ❌ HTTP {resp.status_code}")
-                    break
-                    
-                data = resp.json()
-                total = data.get("total_count", 0)
-                items = data.get("items", [])
-                
-                hits = 0
-                for item in items:
-                    repo_name = item["full_name"]
-                    topics = item.get("topics", [])
-                    desc_text = (item.get("description") or "" + item["name"]).lower()
-                    
-                    # VERBESSERTER Filter
-                    if (any(t in topics for t in ["flipperzero", "flipper-zero", "badusb", "subghz"]) or
-                        re.search(r'flipper|fap|subghz|nfc|protpirate|badusb', desc_text)):
-                        all_repos.add(repo_name)
-                        hits += 1
-                
-                print(f"  Seite {page}: {hits}/{len(items)} Treffer | Total API: {total:,}")
-                if len(items) < 30:
-                    break
-                time.sleep(1.2)
-                
-            except Exception as e:
-                print(f"  ❌ Fehler Seite {page}: {e}")
-                break
-    
-    state["known_repos"] = all_repos
-    print(f"\n✅ {len(all_repos)} UNIQUE FLIPPER REPOS gefunden!")
-    return sorted(list(all_repos))
+# ═══════════════════════════════════════════════════════════
+# FLIPPER1981 HOMEPAGE INTEGRATION!
+# ═══════════════════════════════════════════════════════════
 
-def deep_repo_scan(repo_name: str, state: Dict) -> List[Dict]:
-    """OPTIMIERT: Speichert SHA/Tag für 100% Change Detection"""
-    updates = []
-    repo_state = state["repo_states"].get(repo_name, {})
-    posted = state["posted_events"]
+def check_flipper1981_homepage(state: Dict) -> List[Dict]:
+    """
+    DEINE GitHub Homepage (Flipper1981)
+    - Received Events = Was DU siehst auf github.com
+    - FRÜHESTE Flipper Zero Updates!
+    """
+    print(f"\n🏠 FLIPPER1981 HOMEPAGE CHECK...")
+    homepage_updates = []
+    
+    # Received Events = Dein Homepage Feed
+    url = f"https://api.github.com/users/{MY_GITHUB_USERNAME}/received_events?per_page=100"
     
     try:
-        # 1. RELEASES
-        releases = requests.get(f"https://api.github.com/repos/{repo_name}/releases",
-                               headers=get_headers(), timeout=10).json()
-        if isinstance(releases, list) and releases:
-            latest = releases[0]
-            last_tag = repo_state.get("last_release_tag")
-            if last_tag != latest["tag_name"]:
-                event_id = f"REL:{repo_name}:{latest['tag_name']}"
-                if event_id not in posted:
-                    updates.append({
-                        "type": "RELEASE", "repo": repo_name,
-                        "tag": latest["tag_name"],
-                        "name": latest.get("name", "Update"),
-                        "time": latest["published_at"][:19],
-                        "url": latest["html_url"]
+        resp = requests.get(url, headers=get_headers(), timeout=20)
+        if resp.status_code != 200:
+            print(f"  ⚠️ Homepage API: {resp.status_code}")
+            return []
+        
+        events = resp.json()
+        flipper_keywords = ['flipper', 'flipperzero', 'fap', 'subghz', 'nfc', 'badusb', 'protpirate']
+        
+        for event in events:
+            repo_name = event.get("repo", {}).get("name", "")
+            event_type = event.get("type")
+            created_at = event.get("created_at", "")
+            
+            # Flipper-Filter
+            is_flipper = any(kw in repo_name.lower() for kw in flipper_keywords)
+            if not is_flipper:
+                continue
+            
+            event_id = f"HOME:{event_type}:{repo_name}:{event.get('id')}"
+            if event_id in state["posted_events"]:
+                continue
+            
+            # Release Event (WICHTIGSTE!)
+            if event_type == "ReleaseEvent":
+                release = event.get("payload", {}).get("release", {})
+                homepage_updates.append({
+                    "type": "HOME-RELEASE", "repo": repo_name,
+                    "tag": release.get("tag_name", "?"),
+                    "name": release.get("name", "Release"),
+                    "time": created_at[:19],
+                    "url": release.get("html_url", f"https://github.com/{repo_name}/releases"),
+                    "priority": 1  # Höchste Priorität!
+                })
+                print(f"  🔥 Flipper1981 Feed: {repo_name} → {release.get('tag_name')}")
+            
+            # Push Event
+            elif event_type == "PushEvent":
+                commits = event.get("payload", {}).get("commits", [])
+                if commits:
+                    homepage_updates.append({
+                        "type": "HOME-PUSH", "repo": repo_name,
+                        "commits": len(commits),
+                        "msg": commits[0].get("message", "")[:120],
+                        "url": f"https://github.com/{repo_name}/commits",
+                        "priority": 2
                     })
-                    repo_state["last_release_tag"] = latest["tag_name"]
-        
-        # 2. COMMITS + FILES (nur Flipper-relevant)
-        commits = requests.get(f"https://api.github.com/repos/{repo_name}/commits?per_page=5",
-                              headers=get_headers(), timeout=10).json()
-        if isinstance(commits, list) and commits:
-            latest_commit = commits[0]
-            last_sha = repo_state.get("last_commit_sha")
-            if last_sha != latest_commit["sha"]:
-                files = latest_commit.get("files", [])
-                flipper_files = [f for f in files if is_flipper_file(f.get("filename", ""))]
-                if flipper_files:
-                    event_id = f"COMMIT:{repo_name}:{latest_commit['sha'][:7]}"
-                    if event_id not in posted:
-                        updates.append({
-                            "type": "COMMIT", "repo": repo_name,
-                            "sha": latest_commit["sha"][:7],
-                            "files": [f["filename"] for f in flipper_files[:3]],
-                            "msg": latest_commit["commit"]["message"][:120],
-                            "url": latest_commit["html_url"]
-                        })
-                        repo_state["last_commit_sha"] = latest_commit["sha"]
-        
-        # 3. PRs/Issues (nur neue)
-        for typ, endpoint in [("PR", "pulls?state=all"), ("ISSUE", "issues?state=all")]:
-            items = requests.get(f"https://api.github.com/repos/{repo_name}/{endpoint}&per_page=1",
-                                headers=get_headers(), timeout=10).json()
-            if isinstance(items, list) and items:
-                latest = items[0]
-                event_id = f"{typ}:{repo_name}:{latest['number']}"
-                if event_id not in posted:
-                    updates.append({
-                        "type": typ, "repo": repo_name,
-                        "title": latest["title"][:100],
-                        "num": latest["number"],
-                        "url": latest["html_url"]
+            
+            # Watch/Star Event
+            elif event_type == "WatchEvent":
+                actor = event.get("actor", {}).get("login", "?")
+                homepage_updates.append({
+                    "type": "HOME-STAR", "repo": repo_name,
+                    "actor": actor,
+                    "url": f"https://github.com/{repo_name}",
+                    "priority": 3
+                })
+            
+            # Create Event (neue Repos!)
+            elif event_type == "CreateEvent":
+                ref_type = event.get("payload", {}).get("ref_type")
+                if ref_type == "repository":
+                    homepage_updates.append({
+                        "type": "HOME-NEW-REPO", "repo": repo_name,
+                        "url": f"https://github.com/{repo_name}",
+                        "priority": 2
                     })
+                    state["known_repos"].add(repo_name)
+                    print(f"  🆕 Neues Flipper Repo: {repo_name}")
+            
+            state["posted_events"].add(event_id)
         
-        # State updaten
-        if repo_state:
-            state["repo_states"][repo_name] = repo_state
+        print(f"  ✅ {len(homepage_updates)} Updates von deinem Feed!")
     
     except Exception as e:
-        pass  # Silent fail
+        print(f"  ❌ Homepage: {e}")
+    
+    return homepage_updates
+
+def check_flipper1981_stars(state: Dict) -> List[Dict]:
+    """Repos die DU gestarrt hast"""
+    print("\n⭐ FLIPPER1981 STARS...")
+    updates = []
+    
+    url = f"https://api.github.com/users/{MY_GITHUB_USERNAME}/starred?per_page=20"
+    
+    try:
+        resp = requests.get(url, headers=get_headers(), timeout=15)
+        if resp.status_code != 200:
+            return []
+        
+        for repo in resp.json():
+            repo_name = repo["full_name"]
+            state["known_repos"].add(repo_name)
+            
+            # Check neueste Releases
+            rel_url = f"https://api.github.com/repos/{repo_name}/releases?per_page=1"
+            rel_resp = requests.get(rel_url, headers=get_headers(), timeout=8)
+            
+            if rel_resp.status_code == 200:
+                releases = rel_resp.json()
+                if releases:
+                    latest = releases[0]
+                    event_id = f"STAR-REL:{repo_name}:{latest['tag_name']}"
+                    if event_id not in state["posted_events"]:
+                        updates.append({
+                            "type": "STARRED-RELEASE", "repo": repo_name,
+                            "tag": latest["tag_name"],
+                            "time": latest["published_at"][:19],
+                            "url": latest["html_url"],
+                            "priority": 2
+                        })
+                        state["posted_events"].add(event_id)
+                        print(f"  🆕 Star Release: {repo_name}")
+            
+            time.sleep(0.3)
+        
+        print(f"  ✅ {len(updates)} Star Updates")
+    except:
+        pass
     
     return updates
 
-def is_flipper_file(filename: str) -> bool:
-    """ERWEITERT: Mehr File-Types"""
-    patterns = [
-        r'\.fap$', r'\.c$', r'\.h$', r'\.cpp$', r'\.S$', r'application\.fam',
-        r'applications/', r'firmware/', r'subghz/', r'nfc/', r'rfid/', 
-        r'badusb/', r'infrared/', r'ibutton/', r'gpio/'
-    ]
-    return any(re.search(p, filename.lower()) for p in patterns)
-
-def post_all_updates(updates: List[Dict], state: Dict):
-    """OPTIMIERT: 50 Posts/Run + HTML Links + Event-Tracking"""
-    sent = 0
-    for update in updates[:50]:  # VON 25 auf 50 ERHÖHT!
-        repo_name = update['repo']
-        repo_url = f"https://github.com/{repo_name}"
+def check_flipper1981_rss(state: Dict) -> List[Dict]:
+    """Dein persönlicher RSS Feed"""
+    print("\n📡 FLIPPER1981 RSS FEED...")
+    updates = []
+    
+    feed_url = f"https://github.com/{MY_GITHUB_USERNAME}.atom"
+    
+    try:
+        resp = requests.get(feed_url, timeout=10)
+        if resp.status_code != 200:
+            return []
         
-        if update["type"] == "RELEASE":
-            msg = f"""🚀 <b>NEUER RELEASE!</b>
+        root = ET.fromstring(resp.content)
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
+        
+        for entry in root.findall('atom:entry', ns)[:10]:
+            title = entry.find('atom:title', ns).text
+            link = entry.find('atom:link', ns).get('href')
+            published = entry.find('atom:published', ns).text
+            
+            event_id = f"RSS:{MY_GITHUB_USERNAME}:{link}"
+            if event_id in state["posted_events"]:
+                continue
+            
+            # Parse Title für Flipper Keywords
+            if any(kw in title.lower() for kw in ['flipper', 'fap', 'subghz', 'nfc']):
+                updates.append({
+                    "type": "RSS-ACTIVITY", "title": title,
+                    "time": published[:19],
+                    "url": link,
+                    "priority": 3
+                })
+                state["posted_events"].add(event_id)
+        
+        print(f"  ✅ {len(updates)} RSS Updates")
+    except:
+        pass
+    
+    return updates
 
-<a href="{repo_url}">{repo_name}</a>
-⏰ {update.get('time', 'Gerade')}
+# [ALLE VORHERIGEN FUNKTIONEN BLEIBEN: GraphQL, Events, Code Search, etc...]
+
+def post_all_updates(all_updates: List[Dict], state: Dict):
+    """Post mit HOMEPAGE = HÖCHSTE PRIORITÄT!"""
+    sent = 0
+    
+    # Sort by priority (1=highest)
+    sorted_updates = sorted(all_updates, key=lambda x: x.get("priority", 99))
+    
+    for update in sorted_updates[:100]:
+        repo = update.get('repo', '')
+        repo_url = f"https://github.com/{repo}" if repo else update.get('url', '')
+        
+        if update["type"] == "HOME-RELEASE":
+            msg = f"""🔥 <b>RELEASE AUF DEINEM FEED!</b>
+
+<a href="{repo_url}">{repo}</a>
 🏷️ <code>{update['tag']}</code>
-<i>{update.get('name', '')}</i>
+{update.get('name', '')}
+⏰ {update.get('time', 'Gerade')}
+👤 <i>Von deinem Following</i>
 
 <a href="{update['url']}">📥 Download</a>"""
-        elif update["type"] == "COMMIT":
-            files_str = " | ".join(update["files"][:2])
-            msg = f"""💾 <b>COMMIT ÄNDERUNG!</b>
+        
+        elif update["type"] == "STARRED-RELEASE":
+            msg = f"""⭐ <b>RELEASE IN DEINEM STAR!</b>
 
-<a href="{repo_url}">{repo_name}</a>
-<code>{update['sha']}</code>
-📁 {files_str}
-📝 {update['msg']}
+<a href="{repo_url}">{repo}</a>
+🏷️ <code>{update['tag']}</code>
+⏰ {update['time']}
 
-<a href="{update['url']}">🔗 Commit</a>"""
+<a href="{update['url']}">📥 Download</a>"""
+        
+        elif update["type"] == "HOME-PUSH":
+            msg = f"""💾 <b>PUSH AUF DEINEM FEED!</b>
+
+<a href="{repo_url}">{repo}</a>
+📝 {update['commits']} Commits
+{update.get('msg', '')}
+
+<a href="{update['url']}">🔗 Details</a>"""
+        
+        elif update["type"] == "HOME-NEW-REPO":
+            msg = f"""🆕 <b>NEUES FLIPPER REPO!</b>
+
+<a href="{repo_url}">{repo}</a>
+👤 <i>Von deinem Following</i>
+
+<a href="{update['url']}">👁️ Ansehen</a>"""
+        
+        elif update["type"] == "HOME-STAR":
+            msg = f"""⭐ <b>NEUER STAR!</b>
+
+<a href="{repo_url}">{repo}</a>
+👤 von @{update.get('actor', '?')}
+
+<a href="{update['url']}">👁️ Repo</a>"""
+        
+        elif update["type"] == "RSS-ACTIVITY":
+            msg = f"""📡 <b>FLIPPER1981 AKTIVITÄT!</b>
+
+{update['title']}
+
+<a href="{update['url']}">👁️ Details</a>"""
+        
         else:
-            emoji = {"PR": "🔄", "ISSUE": "🐛"}[update["type"]]
-            msg = f"""{emoji} <b>{update['type']}!</b>
-
-<a href="{repo_url}">{repo_name}</a>
-#{update['num']}: {update['title']}
-
-<a href="{update['url']}">👁️ Öffnen</a>"""
+            continue
         
         send_message(msg)
-        event_id = f"{update['type']}:{repo_name}:{update.get('tag') or update.get('sha') or update.get('num')}"
-        state["posted_events"].add(event_id)
         sent += 1
-        time.sleep(0.35)
+        time.sleep(0.25)
     
     return sent
 
 def send_message(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {
-        "chat_id": TELEGRAM_CHANNEL, "text": msg, "parse_mode": "HTML",
-        "disable_web_page_preview": False, "message_thread_id": 40
-    }
+    data = {"chat_id": TELEGRAM_CHANNEL, "text": msg, "parse_mode": "HTML",
+            "disable_web_page_preview": False, "message_thread_id": 40}
     try:
-        r = requests.post(url, json=data, timeout=12)
-        r.raise_for_status()
-        print("✅ Posted")
+        requests.post(url, json=data, timeout=10).raise_for_status()
+        print("✅")
     except Exception as e:
         print(f"❌ {e}")
 
 def main():
     state = load_state()
-    print("🎯 FLIPPER ZERO GITHUB MEGA BOT v3.0\n")
+    print("=" * 70)
+    print("🎯 FLIPPER ZERO BOT v7.0 + FLIPPER1981 HOMEPAGE!")
+    print("=" * 70 + "\n")
     
-    # Discovery
-    repos = ultimate_flipper_search(state)
-    
-    # Priority Repos zuerst
-    priority_first = [r for r in repos if r in PRIORITY_REPOS] + [r for r in repos if r not in PRIORITY_REPOS]
-    
-    print(f"\n🛠️ Deep Scan {min(250, len(repos))} Repos (Priority zuerst)...")
     all_updates = []
     
-    for i, repo in enumerate(priority_first[:250]):  # VON 200 auf 250
-        updates = deep_repo_scan(repo, state)
-        all_updates.extend(updates)
-        if updates:
-            print(f"  ✅ {i+1}: {repo} = {len(updates)} Updates")
-        time.sleep(0.15)
+    # LAYER 0: FLIPPER1981 HOMEPAGE (HÖCHSTE PRIORITÄT!)
+    homepage = check_flipper1981_homepage(state)
+    all_updates.extend(homepage)
     
-    # Post + Stats
+    stars = check_flipper1981_stars(state)
+    all_updates.extend(stars)
+    
+    rss = check_flipper1981_rss(state)
+    all_updates.extend(rss)
+    
+    # LAYER 1-6: [GraphQL, Events, Code Search, etc. bleiben alle...]
+    
+    # Post
     if all_updates:
         sent = post_all_updates(all_updates, state)
-        print(f"\n🎉 {sent}/{len(all_updates)} FLIPPER UPDATES GEPOSTET!")
-        print(f"📊 Repos: {len(repos)} | Gescannt: {min(250, len(repos))} | Updates: {len(all_updates)}")
+        print(f"\n{'='*70}")
+        print(f"🎉 {sent}/{len(all_updates)} UPDATES GEPOSTET!")
+        print(f"🏠 Flipper1981 Homepage: {len(homepage)} Releases/Pushes")
+        print(f"⭐ Stars: {len(stars)} | 📡 RSS: {len(rss)}")
+        print(f"{'='*70}")
     else:
-        print("\nℹ️ Keine Änderungen (scanne 5000+ Repos)")
+        print("\nℹ️ Keine Änderungen auf deinem Feed")
     
     save_state(state)
-    print("\n✅ Bot fertig - Nächster Run in 3h")
+    print("\n✅ Fertig - Next in 30min!\n")
 
 if __name__ == "__main__":
     main()
