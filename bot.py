@@ -3,14 +3,14 @@ import os
 import json
 from datetime import datetime, timezone, timedelta
 
-# Secrets aus GitHub Actions holen
+# Secrets
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHANNEL = os.environ["CHANNEL_ID"]
 
-# State-Datei für letzte Checks / Releases
+# State-Datei
 STATE_FILE = "/tmp/flipper_state.json"
 
-# Liste der Top-Repos für Release-Überwachung (erweiterbar)
+# Top-Repos für Releases (erweiterbar)
 WATCHED_REPOS = [
     "DarkFlippers/unleashed-firmware",
     "RogueMaster/flipperzero-firmware-wPlugins",
@@ -35,13 +35,9 @@ def save_state(state):
 def check_new_repos(state):
     since = datetime.fromisoformat(state["last_repo_check"]).strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    query = (
-        "(flipper zero OR flipper-zero OR flipperzero) "
-        "(fap OR .fap OR plugin OR firmware OR app OR custom OR unleashed OR rogue OR momentum OR xtreme OR subghz OR nfc OR rfid OR badusb OR ibutton OR gpio OR ir) "
-        "-is:fork -fork:true "
-        "created:>" + since
-    )
-    url = f"https://api.github.com/search/repositories?q={query}&sort=created&order=desc&per_page=15"
+    # Vereinfachte, aber immer noch breite Suche (GitHub-Limits einhalten!)
+    query = f"flipperzero OR \"flipper zero\" OR fap OR plugin OR firmware OR unleashed OR rogue OR momentum created:>{since}"
+    url = f"https://api.github.com/search/repositories?q={query}&sort=created&order=desc&per_page=20"
     
     print(f"Repo-Suche: {query}")
     print(f"URL: {url}")
@@ -50,6 +46,9 @@ def check_new_repos(state):
     
     try:
         resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 422:
+            print("Query zu komplex – GitHub lehnt ab (422)")
+            return []
         resp.raise_for_status()
         items = resp.json().get("items", [])
         print(f"Gefundene neue Repos: {len(items)}")
@@ -60,7 +59,7 @@ def check_new_repos(state):
 
 def check_new_releases(state):
     new_releases = []
-    releases_state = state["releases"]
+    releases_state = state.get("releases", {})
     
     for repo in WATCHED_REPOS:
         url = f"https://api.github.com/repos/{repo}/releases?per_page=3"
@@ -71,10 +70,10 @@ def check_new_releases(state):
             
             latest = releases[0]
             tag = latest["tag_name"]
-            last_tag = releases_state.get(repo, None)
+            last_tag = releases_state.get(repo)
             
             if last_tag != tag:
-                new_releases.append(latest)
+                new_releases.append((repo, latest))  # Repo + Release-Objekt
                 releases_state[repo] = tag
                 print(f"Neuer Release in {repo}: {tag}")
         except Exception as e:
@@ -85,7 +84,8 @@ def check_new_releases(state):
 
 def post_findings(items, new_releases):
     sent = 0
-    # Zuerst Repos posten
+    
+    # Neue Repos posten
     for repo in items:
         if sent >= 4:
             break
@@ -95,7 +95,8 @@ def post_findings(items, new_releases):
         desc = (repo["description"] or "Keine Beschreibung").strip()[:140]
         stars = repo["stargazers_count"]
         
-        message = f"""🆕 <b>Neues Flipper-Projekt: {name}</b>
+        message = f"""🆕 <b>Neues Flipper Zero Projekt!</b>
+<b>{name}</b>
 ⭐ {stars} • {created}
 {desc}
 
@@ -104,11 +105,10 @@ def post_findings(items, new_releases):
         send_message(message)
         sent += 1
     
-    # Dann Releases posten
-    for release in new_releases:
+    # Neue Releases posten
+    for repo, release in new_releases:
         if sent >= 4:
             break
-        repo = release["repository_url"].split('/repos/')[1]
         tag = release["tag_name"]
         published = release["published_at"][:10]
         name = release["name"] or tag
@@ -131,12 +131,12 @@ def send_message(message):
         "text": message,
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
-        "message_thread_id": 40   # ← DEIN Topic (#Mein Flipper) – aus deinem Link!
+        "message_thread_id": 40  # Dein Topic!
     }
     try:
         r = requests.post(send_url, json=payload, timeout=10)
         r.raise_for_status()
-        print("Gesendet in Topic 40: " + message.splitlines()[0])
+        print("Gesendet: " + message.splitlines()[0])
     except Exception as e:
         print("Telegram Fehler:", str(e))
 
@@ -145,6 +145,7 @@ def check_flipper_updates():
     
     new_repos = check_new_repos(state)
     new_releases = check_new_releases(state)
+    
     post_findings(new_repos, new_releases)
     
     state["last_repo_check"] = datetime.now(timezone.utc).isoformat()
