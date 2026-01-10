@@ -1,28 +1,29 @@
-name: Flipper Zero News Check
+name: Flipper Zero New Projects Check
 
 on:
   schedule:
-    - cron: '15 */3 * * *'          # alle 3 Stunden
-  workflow_dispatch:                # ← das ist entscheidend für manuellen Start!
+    - cron: '15 */3 * * *'          # every 3 hours (at :15 past the hour)
+  workflow_dispatch:                # allows manual triggering
 
 jobs:
-  check:
+  check-new-projects:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Python einrichten
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Abhängigkeiten installieren
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Bot ausführen
+      - name: Run the checker script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
