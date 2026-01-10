@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone, timedelta
 import time
 from typing import List, Dict, Set
+import re
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHANNEL = os.environ["CHANNEL_ID"]
@@ -11,13 +12,12 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", None)
 
 STATE_FILE = "/tmp/flipper_state.json"
 
-# ULTIMATIVE Flipper-Suche (deckt 100% ab)
 FLIPPER_QUERIES = [
     'topic:flipperzero OR topic:"flipper-zero" OR topic:flipperzero-firmware OR topic:flipper-plugin',
-    '"flipper zero" OR flipperzero OR fap OR "flipper app" OR protpiratein',
+    '"flipper zero" OR flipperzero OR fap OR "flipper app" OR protpiratein OR protpirate',
     'subghz OR nfc OR rfid OR badusb OR ibutton OR gpio OR infrared OR "flipper mod"',
     'unleashed-firmware OR rogiemaster OR momentum-firmware OR xtreme-firmware OR darkflippers',
-    'flipperzero OR flipper-zero pushed:>2026-01-09 OR updated:>2026-01-09'  # Heute Änderungen
+    'flipperzero OR "flipper zero" pushed:>2026-01-09 OR updated:>2026-01-09'
 ]
 
 def load_state() -> Dict:
@@ -26,7 +26,7 @@ def load_state() -> Dict:
             state = json.load(f)
             state["posted_events"] = set(state.get("posted_events", []))
             state["known_repos"] = set(state.get("known_repos", []))
-            state["repo_states"] = state.get("repo_states", {})  # SHA/Tag pro Repo
+            state["repo_states"] = state.get("repo_states", {})
             return state
     except:
         return {"known_repos": set(), "posted_events": set(), "repo_states": {}}
@@ -45,61 +45,56 @@ def get_headers():
     return headers
 
 def ultimate_flipper_search(state: Dict) -> List[str]:
-    """Finde ALLE flipperzero-relevanten Repos + Änderungen"""
-    print("🌟 ULTIMATE FLIPPER SUCHE - 100% Coverage!")
+    print("🔥 ULTIMATIVE FLIPPER SUCHE STARTET!")
     all_repos: Set[str] = set(state["known_repos"])
     
-    # 5 Queries x 20 Pages = 3000 Potenzial-Repos
     for q_num, query in enumerate(FLIPPER_QUERIES, 1):
-        print(f"\n📡 Query {q_num}/5: {query[:60]}...")
+        print(f"Query {q_num}/5: {query[:60]}")
         for page in range(1, 21):
             url = f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page=30&page={page}"
             try:
                 resp = requests.get(url, headers=get_headers(), timeout=25)
                 if resp.status_code == 403:
-                    print("⏳ Rate limit - warte...")
+                    print("Rate limit - warte 90s...")
                     time.sleep(90)
-                    page -= 1  # Wiederholen
+                    page -= 1
                     continue
                 data = resp.json()
                 total = data.get("total_count", 0)
                 items = data.get("items", [])
                 
-                flipper_hits = 0
+                hits = 0
                 for item in items:
                     repo_name = item["full_name"]
                     topics = item.get("topics", [])
-                    desc = item["description"] or ""
+                    text = (item["description"] or "" + item["name"]).lower()
                     
-                    # STRIKT Flipper-Filter
                     if ("flipperzero" in topics or "flipper-zero" in topics or 
-                        any(kw in (desc.lower() + item["name"].lower()) for kw in 
-                            ["flipper zero", "flipperzero", "fap", "protpiratein", "subghz"])):
+                        re.search(r'flipper| fap |subghz|nfc|protpirate', text)):
                         all_repos.add(repo_name)
-                        flipper_hits += 1
+                        hits += 1
                 
-                print(f"  Seite {page}/20: {len(items)} Items → {flipper_hits} Flipper | Total API: {total:,}")
+                print(f"  Seite {page}: {hits} Treffer | API Total: {total}")
                 if len(items) < 30:
                     break
                 time.sleep(1.3)
                 
             except Exception as e:
-                print(f"  Fehler Seite {page}: {e}")
+                print(f"  Fehler: {e}")
                 break
     
     state["known_repos"] = all_repos
-    print(f"\n🎉 {len(all_repos)} UNIQUE FLIPPER REPOS gefunden!")
+    print(f"Total UNIQUE FLIPPER REPOS: {len(all_repos)}")
     return sorted(list(all_repos))
 
 def deep_repo_scan(repo_name: str, state: Dict) -> List[Dict]:
-    """SCANNT JEDES REPO: Releases/Commits/PRs/Issues/Forks"""
     updates = []
     repo_state = state["repo_states"].get(repo_name, {})
     posted = state["posted_events"]
     
     try:
-        # RELEASES - vergleiche gespeichertes Tag
-        releases = requests.get(f"https://api.github.com/repos/{repo_name}/releases", 
+        # 1. RELEASES
+        releases = requests.get(f"https://api.github.com/repos/{repo_name}/releases",
                                headers=get_headers()).json()
         if releases:
             latest = releases[0]
@@ -109,24 +104,21 @@ def deep_repo_scan(repo_name: str, state: Dict) -> List[Dict]:
                 if event_id not in posted:
                     updates.append({
                         "type": "RELEASE", "repo": repo_name,
-                        "tag": latest["tag_name"], "name": latest.get("name", ""),
+                        "tag": latest["tag_name"],
+                        "name": latest.get("name", "Update"),
                         "time": latest["published_at"][:19],
-                        "url": latest["html_url"],
-                        "body": latest.get("body", "")[:200]
+                        "url": latest["html_url"]
                     })
         
-        # COMMITS - letzte SHA + Files
-        commits = requests.get(f"https://api.github.com/repos/{repo_name}/commits?per_page=3",
+        # 2. COMMITS + FILES
+        commits = requests.get(f"https://api.github.com/repos/{repo_name}/commits?per_page=5",
                               headers=get_headers()).json()
         if commits:
             latest_commit = commits[0]
             last_sha = repo_state.get("last_commit_sha")
             if last_sha != latest_commit["sha"]:
                 files = latest_commit.get("files", [])
-                flipper_files = []
-                for f in files:
-                    if is_flipper_file(f.get("filename", "")):
-                        flipper_files.append(f)
+                flipper_files = [f for f in files if is_flipper_file(f.get("filename", ""))]
                 if flipper_files:
                     event_id = f"COMMIT:{repo_name}:{latest_commit['sha'][:7]}"
                     if event_id not in posted:
@@ -134,11 +126,11 @@ def deep_repo_scan(repo_name: str, state: Dict) -> List[Dict]:
                             "type": "COMMIT", "repo": repo_name,
                             "sha": latest_commit["sha"][:7],
                             "files": [f["filename"] for f in flipper_files],
-                            "msg": latest_commit["commit"]["message"][:120],
+                            "msg": latest_commit["commit"]["message"][:100],
                             "url": latest_commit["html_url"]
                         })
         
-        # PRs + Issues (neueste)
+        # 3. PRs/Issues
         for typ, endpoint in [("PR", "pulls"), ("ISSUE", "issues")]:
             items = requests.get(f"https://api.github.com/repos/{repo_name}/{endpoint}",
                                 headers=get_headers()).json()
@@ -148,105 +140,91 @@ def deep_repo_scan(repo_name: str, state: Dict) -> List[Dict]:
                 if event_id not in posted:
                     updates.append({
                         "type": typ, "repo": repo_name,
-                        "title": latest["title"][:100],
+                        "title": latest["title"][:80],
                         "num": latest["number"],
                         "url": latest["html_url"]
                     })
-        
-        # Update State
-        if releases:
-            state["repo_states"][repo_name] = {
-                "last_release_tag": releases[0]["tag_name"],
-                "last_commit_sha": commits[0]["sha"] if commits else repo_state.get("last_commit_sha")
-            }
     
-    except Exception as e:
-        print(f"Scan {repo_name}: {e}")
+    except:
+        pass
     
     return updates
 
 def is_flipper_file(filename: str) -> bool:
-    FLIPPER_PATTERNS = [
-        r'\.fap$', r'\.c$', r'\.h$', r'\.cpp$', r'\.S$', r'application\.fam',
-        r'applications/', r'firmware/', r'subghz/', r'nfc/', r'rfid/',
-        r'badusb', r'protpiratein', r'ibutton', r'infrared'
-    ]
-    lower = filename.lower()
-    return any(re.search(pattern, lower) for pattern in FLIPPER_PATTERNS)
+    patterns = [r'\.fap$', r'\.c$', r'\.h$', r'applications/', r'firmware/', r'subghz/']
+    return any(re.search(p, filename.lower()) for p in patterns)
 
 def post_all_updates(updates: List[Dict]):
-    """Poste ALLE Flipper-Änderungen"""
-    for update in sorted(updates, key=lambda x: x["type"])[::-1][:30]:
-        repo_link = f"<a href='https://github.com/{update[\"repo\"]}'>{update[\"repo\"]}</a>"
+    for update in updates[:25]:
+        repo_link = f"<a href=\"https://github.com/{update['repo']}\">{update['repo']}</a>"
         
         if update["type"] == "RELEASE":
-            msg = f"""🚀 <b>RELEASE {repo_link}</b>
+            msg = f"""🚀 <b>NEUER RELEASE!</b>
 
-⏰ {update['time']}
+{repo_link}
+⏰ {update.get('time', 'Gerade')}
 🏷️ <code>{update['tag']}</code>
-{update['name']}
+<i>{update.get('name', '')}</i>
 
-<pre>{update['body']}</pre>
-
-<a href='{update['url']}'>📥 Download</a>"""
+<a href=\"{update['url']}\">📥 Download</a>"""
         elif update["type"] == "COMMIT":
-            files = " | ".join(update["files"][:3])
-            msg = f"""💾 <b>COMMIT {repo_link}</b>
+            files_str = " | ".join(update["files"][:2])
+            msg = f"""💾 <b>COMMIT ÄNDERUNG!</b>
 
+{repo_link}
 <code>{update['sha']}</code>
-📁 <b>{files}</b>
+📁 {files_str}
 📝 {update['msg']}
 
-<a href='{update['url']}'>🔗 Details</a>"""
+<a href=\"{update['url']}\">🔗 Commit</a>"""
         else:
             emoji = {"PR": "🔄", "ISSUE": "🐛"}[update["type"]]
-            msg = f"""{emoji} <b>{update['type']} {repo_link}</b>
+            msg = f"""{emoji} <b>{update['type']}!</b>
 
-#{update['num']} {update['title']}
+{repo_link}
+#{update['num']}: {update['title']}
 
-<a href='{update['url']}'>👁️ Open</a>"""
+<a href=\"{update['url']}\">👁️ Öffnen</a>"""
         
         send_message(msg)
-        time.sleep(0.35)
+        time.sleep(0.4)
 
 def send_message(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHANNEL, "text": msg, "parse_mode": "HTML",
-            "disable_web_page_preview": False, "message_thread_id": 40}
+    data = {
+        "chat_id": TELEGRAM_CHANNEL, "text": msg, "parse_mode": "HTML",
+        "disable_web_page_preview": False, "message_thread_id": 40
+    }
     try:
         r = requests.post(url, json=data, timeout=12)
         r.raise_for_status()
-        print("✅ Posted!")
+        print("✅ Gesendet!")
     except Exception as e:
-        print(f"❌ Post: {e}")
+        print(f"❌ {e}")
 
 def main():
     state = load_state()
-    print("🔥 FLIPPER ZERO UNIVERSAL BOT - J E D E Ä N D E R U N G !")
+    print("🎯 FLIPPER ZERO - J E D E Ä N D E R U N G !")
     
-    # Ultimate Suche
     repos = ultimate_flipper_search(state)
     
-    # Scan TOP 150 Repos
-    print(f"🕵️ Deep-Scan TOP 150 von {len(repos)} Repos...")
+    print(f"🛠️ Scan {min(200, len(repos))} Repos...")
     all_updates = []
     
-    for i, repo in enumerate(repos[:150]):
+    for i, repo in enumerate(repos[:200]):
         updates = deep_repo_scan(repo, state)
+        all_updates.extend(updates)
         if updates:
-            all_updates.extend(updates)
-            print(f"  {i+1}: {repo} → {len(updates)} Updates!")
-        time.sleep(0.2)
+            print(f"  {i+1}: {repo} = {len(updates)} Updates")
+        time.sleep(0.18)
     
-    # Poste
     if all_updates:
         post_all_updates(all_updates)
-        print(f"\n🎊 {len(all_updates)} FLIPPER ÄNDERUNGEN gepostet!")
+        print(f"\n🎉 {len(all_updates)} FLIPPER UPDATES gepostet!")
     else:
-        print("\nℹ️ Keine Änderungen gefunden (scanne 1000+ Repos)")
+        print("\nℹ️ Aktuell keine Änderungen")
     
     save_state(state)
-    print("✅ FERTIG - Nächste Runde in 3h")
 
 if __name__ == "__main__":
     main()
