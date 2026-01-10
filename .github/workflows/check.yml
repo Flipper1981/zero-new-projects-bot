@@ -3,23 +3,27 @@ name: Flipper Zero News Check
 on:
   schedule:
     - cron: '15 */3 * * *'          # alle 3 Stunden (15 Minuten nach jeder vollen Stunde)
-  workflow_dispatch:                # zum manuellen Testen
+  workflow_dispatch:                # manueller Start zum Testen möglich
 
 jobs:
   check:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Python
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      
-      - name: Run check
+
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Bot ausführen
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
