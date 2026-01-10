@@ -35,11 +35,10 @@ def save_state(state):
 def check_new_repos(state):
     since = datetime.fromisoformat(state["last_repo_check"]).strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    # Verfeinerte Suche: Keywords + Topics, Forks ausschließen, relevant für Flipper (Apps, Firmware, Plugins)
     query = (
         "(flipper zero OR flipper-zero OR flipperzero) "
         "(fap OR .fap OR plugin OR firmware OR app OR custom OR unleashed OR rogue OR momentum OR xtreme OR subghz OR nfc OR rfid OR badusb OR ibutton OR gpio OR ir) "
-        "-is:fork -fork:true "  # Forks ausschließen
+        "-is:fork -fork:true "
         "created:>" + since
     )
     url = f"https://api.github.com/search/repositories?q={query}&sort=created&order=desc&per_page=15"
@@ -131,25 +130,26 @@ def send_message(message):
         "chat_id": TELEGRAM_CHANNEL,
         "text": message,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False
+        "disable_web_page_preview": False,
+        "message_thread_id": 40   # ← DEIN Topic (#Mein Flipper) – aus deinem Link!
     }
     try:
         r = requests.post(send_url, json=payload, timeout=10)
         r.raise_for_status()
-        print("Gesendet: " + message.splitlines()[0])
+        print("Gesendet in Topic 40: " + message.splitlines()[0])
     except Exception as e:
         print("Telegram Fehler:", str(e))
 
 def check_flipper_updates():
     state = load_state()
     
-    # Neue Repos checken
     new_repos = check_new_repos(state)
-    
-    # Neue Releases checken
     new_releases = check_new_releases(state)
-    
-    # Posten, wenn etwas Neues da ist
     post_findings(new_repos, new_releases)
     
-    # State
+    state["last_repo_check"] = datetime.now(timezone.utc).isoformat()
+    save_state(state)
+    print("Check beendet")
+
+if __name__ == "__main__":
+    check_flipper_updates()
