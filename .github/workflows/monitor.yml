@@ -1,6 +1,0 @@
-import requests
-import os
-from datetime import datetime, timedelta
-from telegram import Bot
-
-TOKEN
