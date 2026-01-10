@@ -2,16 +2,15 @@ name: Flipper Zero News Check
 
 on:
   schedule:
-    - cron: '15 */3 * * *'          # alle 3 Stunden (15 Minuten nach jeder vollen Stunde)
-  workflow_dispatch:                # manueller Start zum Testen möglich
+    - cron: '15 */3 * * *'          # alle 3 Stunden
+  workflow_dispatch:                # ← das ist entscheidend für manuellen Start!
 
 jobs:
   check:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository auschecken
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Python einrichten
         uses: actions/setup-python@v5
