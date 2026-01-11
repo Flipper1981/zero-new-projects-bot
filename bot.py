@@ -10,22 +10,7 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHANNEL = os.environ["CHANNEL_ID"]
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
-STATE_FILE = "/tmp/flipper_optimized_state.json"
-
-# PRIORITY REPOS - die WICHTIGSTEN!
-PRIORITY_REPOS = [
-    "flipperdevices/flipperzero-firmware",
-    "DarkFlippers/unleashed-firmware",
-    "RogueMaster/flipperzero-firmware-wPlugins",
-    "Next-Flip/Momentum-Firmware",
-    "Flipper-XFW/Xtreme-Firmware",
-    "RocketGod-git/ProtoPiratein",
-    "xMasterX/all-the-plugins",
-    "djsime1/awesome-flipperzero",
-    "UberGuidoZ/Flipper",
-    "jblanked/FlipperHTTP",
-    "jblanked/FlipTelegram"
-]
+STATE_FILE = "/tmp/flipper_maximum_state.json"
 
 def get_headers():
     h = {"Accept": "application/vnd.github.v3+json"}
@@ -33,221 +18,391 @@ def get_headers():
         h["Authorization"] = f"token {GITHUB_TOKEN}"
     return h
 
-def load_state():
-    try:
-        with open(STATE_FILE) as f:
-            s = json.load(f)
-            s['known_repos'] = set(s.get('known_repos', []))
-            s['posted_events'] = set(s.get('posted_events', []))
-            s['last_rss_check'] = s.get('last_rss_check', {})
-            return s
-    except:
-        return {'known_repos': set(), 'posted_events': set(), 'last_rss_check': {}}
-
-def save_state(s):
-    c = s.copy()
-    c['known_repos'] = list(s['known_repos'])
-    c['posted_events'] = list(s['posted_events'])
-    with open(STATE_FILE, 'w') as f:
-        json.dump(c, f)
-
-# ═══════════════════════════════════════════════════════════
-# LAYER 1: RSS FEEDS (0 API CALLS!)
-# ═══════════════════════════════════════════════════════════
-
-def check_rss_releases(repo: str, state: Dict) -> List[Dict]:
-    """RSS Feed = 0 API Calls!"""
-    updates = []
-    feed_url = f"https://github.com/{repo}/releases.atom"
-    
-    try:
-        resp = requests.get(feed_url, timeout=8)
-        if resp.status_code != 200:
-            return []
-        
-        root = ET.fromstring(resp.content)
-        ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        
-        last_check = state['last_rss_check'].get(repo, '')
-        
-        for entry in root.findall('atom:entry', ns)[:5]:
-            entry_id = entry.find('atom:id', ns).text
-            
-            if entry_id == last_check:
-                break
-            
-            title = entry.find('atom:title', ns).text
-            link = entry.find('atom:link', ns).get('href')
-            published = entry.find('atom:published', ns).text
-            
-            # Tag extrahieren
-            tag = title.split()[-1] if title else "unknown"
-            event_id = f"RSS:{repo}:{tag}"
-            
-            if event_id not in state['posted_events']:
-                updates.append({
-                    'type': 'RSS-RELEASE',
-                    'repo': repo,
-                    'tag': tag,
-                    'title': title,
-                    'time': published[:19],
-                    'url': link
-                })
-                state['posted_events'].add(event_id)
-                print(f"  🆕 RSS: {repo} → {tag}")
-        
-        # Update last check
-        if root.findall('atom:entry', ns):
-            state['last_rss_check'][repo] = root.find('atom:entry', ns).find('atom:id', ns).text
-    
-    except Exception as e:
-        pass
-    
-    return updates
-
-# ═══════════════════════════════════════════════════════════
-# LAYER 2: SMART API SEARCH (Rate Limit Safe)
-# ═══════════════════════════════════════════════════════════
-
 def check_rate_limit():
-    """Check verfügbare API Calls"""
+    """Detaillierter Rate Limit Check"""
     try:
         resp = requests.get("https://api.github.com/rate_limit", headers=get_headers(), timeout=5)
         data = resp.json()
-        remaining = data['resources']['core']['remaining']
-        reset_time = data['resources']['core']['reset']
         
-        print(f"  📊 Rate Limit: {remaining} remaining")
+        core = data['resources']['core']
+        search = data['resources']['search']
         
-        if remaining < 100:
-            reset_dt = datetime.fromtimestamp(reset_time)
-            wait_seconds = (reset_dt - datetime.now()).total_seconds()
-            print(f"  ⚠️ Rate Limit niedrig! Reset in {int(wait_seconds/60)}min")
-            return False
+        print(f"\n📊 RATE LIMIT STATUS:")
+        print(f"   Core API: {core['remaining']}/{core['limit']}")
+        print(f"   Search API: {search['remaining']}/{search['limit']}")
         
-        return True
+        reset_time = datetime.fromtimestamp(core['reset'])
+        wait_seconds = (reset_time - datetime.now()).total_seconds()
+        print(f"   Reset in: {int(wait_seconds/60)}min {int(wait_seconds%60)}s\n")
+        
+        return core['remaining'] > 10
     except:
         return True
 
-def smart_search(state: Dict) -> Set[str]:
-    """Smart Search mit Rate Limit Check"""
-    print("\n🔍 SMART SEARCH...")
+# ═══════════════════════════════════════════════════════════
+# MASSIVE QUERY GENERATOR - JEDER PARAMETER!
+# ═══════════════════════════════════════════════════════════
+
+def generate_massive_queries() -> List[str]:
+    """
+    ALLE GitHub Search Qualifiers - KOMPLETT!
+    Generiert 500+ verschiedene Queries
+    """
+    all_queries = []
     
-    if not check_rate_limit():
-        print("  ⚠️ Rate Limit zu niedrig, überspringe API Search")
-        return set()
+    print("\n🔧 GENERIERE ALLE QUERIES...")
+    print("=" * 70)
     
-    repos = set()
-    
-    # NUR EINE optimierte Query!
-    queries = [
-        'topic:flipperzero archived:false stars:>10',
-        'flipper language:C archived:false stars:>20 pushed:>2025-12-01',
+    # ────────────────────────────────────────────────────────
+    # 1. KEYWORDS (ALLE Variationen!)
+    # ────────────────────────────────────────────────────────
+    print("  1. Keywords...")
+    keywords = [
+        'flipper', 'flipperzero', 'flipper-zero', 'flipper_zero',
+        'FlipperZero', 'FLIPPERZERO', 'Flipper-Zero',
+        'subghz', 'sub-ghz', 'subGHz', 'SubGHz', 'sub_ghz',
+        'nfc', 'NFC', 'Nfc',
+        'rfid', 'RFID', 'Rfid',
+        'badusb', 'bad-usb', 'BadUSB', 'bad_usb',
+        'infrared', 'IR', 'ir', 'Infrared',
+        'ibutton', 'iButton', 'i-button',
+        'protpirate', 'prot-pirate', 'ProtoPirate', 'ProtoPiratein',
+        'unleashed', 'Unleashed', 'unleashed-firmware',
+        'roguemaster', 'RogueMaster', 'rogue-master',
+        'momentum', 'Momentum', 'momentum-firmware',
+        'xtreme', 'Xtreme', 'xtreme-firmware',
+        'fap', 'FAP', 'Fap', '.fap',
+        'flipper-app', 'flipper-application', 'flipper-plugin'
     ]
     
-    for query in queries:
-        url = f"https://api.github.com/search/repositories?q={query}&per_page=30&sort=updated"
-        
-        try:
-            resp = requests.get(url, headers=get_headers(), timeout=15)
-            
-            if resp.status_code == 403:
-                print(f"  ⚠️ Rate Limit Hit! Stoppe weitere Queries")
-                break
-            
-            if resp.status_code == 200:
-                items = resp.json().get('items', [])
-                for item in items:
-                    repos.add(item['full_name'])
-                
-                print(f"  ✅ Query: {len(items)} repos")
-            
-            time.sleep(2)
-        
-        except:
-            pass
+    # Basis Keyword Queries
+    for kw in keywords:
+        all_queries.append(f"{kw} archived:false")
     
-    print(f"  Total: {len(repos)} repos")
-    return repos
-
-# ═══════════════════════════════════════════════════════════
-# POST TO TELEGRAM
-# ═══════════════════════════════════════════════════════════
-
-def post_update(update: Dict):
-    """Post to Telegram"""
-    repo = update.get('repo', '')
-    repo_url = f"https://github.com/{repo}"
+    print(f"     → {len(keywords)} keyword queries")
     
-    if update['type'] == 'RSS-RELEASE':
-        msg = f"""🚀 <b>RELEASE!</b>
-
-<a href="{repo_url}">{repo}</a>
-🏷️ <code>{update['tag']}</code>
-⏰ {update.get('time', 'Gerade')}
-
-<a href="{update['url']}">📥 Download</a>"""
+    # ────────────────────────────────────────────────────────
+    # 2. LANGUAGE (JEDE Sprache!)
+    # ────────────────────────────────────────────────────────
+    print("  2. Languages...")
+    languages = [
+        'C', 'Python', 'C++', 'Makefile', 'Shell', 'JavaScript',
+        'Rust', 'Go', 'Assembly', 'CMake', 'Java', 'TypeScript',
+        'Lua', 'Ruby', 'Perl', 'PHP', 'Swift', 'Kotlin'
+    ]
     
-    elif update['type'] == 'API-RELEASE':
-        msg = f"""🚀 <b>RELEASE!</b>
-
-<a href="{repo_url}">{repo}</a>
-🏷️ <code>{update['tag']}</code>
-{update.get('name', '')}
-
-<a href="{update['url']}">📥 Download</a>"""
+    for kw in ['flipper', 'flipperzero', 'subghz', 'nfc', 'badusb']:
+        for lang in languages:
+            all_queries.append(f"{kw} language:{lang} archived:false")
     
-    else:
-        return
+    print(f"     → {5 * len(languages)} language queries")
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {
-        'chat_id': TELEGRAM_CHANNEL,
-        'text': msg,
-        'parse_mode': 'HTML',
-        'disable_web_page_preview': False,
-        'message_thread_id': 40
-    }
+    # ────────────────────────────────────────────────────────
+    # 3. TOPICS (ALLE Topics!)
+    # ────────────────────────────────────────────────────────
+    print("  3. Topics...")
+    topics = [
+        'flipperzero', 'flipper-zero', 'flipper',
+        'flipper-plugin', 'flipper-app', 'flipper-firmware',
+        'flipper-application', 'flipper-tool', 'flipper-script',
+        'fap', 'fap-file', 'fap-application',
+        'subghz', 'sub-ghz', 'subghz-decoder', 'subghz-bruteforce',
+        'subghz-analyzer', 'subghz-scanner', 'subghz-jammer',
+        'nfc', 'nfc-reader', 'nfc-tools', 'nfc-card', 'nfc-emulator',
+        'rfid', 'rfid-reader', 'rfid-cloner', 'rfid-tools',
+        'badusb', 'bad-usb', 'rubber-ducky', 'ducky-script',
+        'infrared', 'ir-remote', 'universal-remote', 'ir-blaster',
+        'ibutton', 'dallas-key', 'one-wire',
+        'gpio', 'uart', 'i2c', 'spi', 'serial',
+        'firmware', 'custom-firmware', 'ota-update', 'bootloader',
+        'pentest', 'pentesting', 'security', 'hacking', 'redteam',
+        'iot', 'embedded', 'hardware', 'electronics'
+    ]
     
-    try:
-        resp = requests.post(url, json=data, timeout=10)
-        resp.raise_for_status()
-        print("  ✅ Posted")
-        time.sleep(0.3)
-    except Exception as e:
-        print(f"  ❌ Post Error: {e}")
-
-# ═══════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════
-
-def main():
-    state = load_state()
+    for topic in topics:
+        all_queries.append(f"topic:{topic} archived:false")
+    
+    print(f"     → {len(topics)} topic queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 4. IN (name, description, readme) - JEDE Kombination!
+    # ────────────────────────────────────────────────────────
+    print("  4. Search Fields (in:)...")
+    search_fields = ['name', 'description', 'readme']
+    
+    for kw in keywords[:20]:  # Top 20 Keywords
+        for field in search_fields:
+            all_queries.append(f"{kw} in:{field} archived:false")
+    
+    print(f"     → {20 * 3} in: queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 5. STARS (ALLE Ranges!)
+    # ────────────────────────────────────────────────────────
+    print("  5. Star Ranges...")
+    star_ranges = [
+        '>0', '>1', '>2', '>5', '>10', '>20', '>50', '>100', 
+        '>200', '>500', '>1000',
+        '1..5', '5..10', '10..20', '20..50', '50..100', '100..500',
+        '500..1000', '>1000'
+    ]
+    
+    for stars in star_ranges:
+        all_queries.append(f"flipper stars:{stars} archived:false")
+        all_queries.append(f"flipperzero stars:{stars} archived:false")
+    
+    print(f"     → {len(star_ranges) * 2} star queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 6. FORKS (ALLE Ranges!)
+    # ────────────────────────────────────────────────────────
+    print("  6. Fork Ranges...")
+    fork_ranges = ['>0', '>1', '>2', '>5', '>10', '>20', '>50', '1..10', '10..50']
+    
+    for forks in fork_ranges:
+        all_queries.append(f"flipperzero forks:{forks} archived:false")
+    
+    print(f"     → {len(fork_ranges)} fork queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 7. SIZE (ALLE Ranges!)
+    # ────────────────────────────────────────────────────────
+    print("  7. Size Ranges...")
+    size_ranges = [
+        '<10', '<50', '<100', '<500', '<1000',
+        '10..100', '100..500', '500..1000', '1000..5000', '5000..10000',
+        '>1000', '>5000', '>10000'
+    ]
+    
+    for size in size_ranges:
+        all_queries.append(f"flipper size:{size} archived:false")
+    
+    print(f"     → {len(size_ranges)} size queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 8. DATES (VIELE verschiedene Zeiträume!)
+    # ────────────────────────────────────────────────────────
+    print("  8. Date Ranges...")
+    
+    now = datetime.now(timezone.utc)
+    date_configs = [
+        (1, 'days'), (3, 'days'), (7, 'days'), (14, 'days'), (30, 'days'),
+        (60, 'days'), (90, 'days'), (180, 'days'), (365, 'days')
+    ]
+    
+    for amount, unit in date_configs:
+        date_str = (now - timedelta(days=amount)).strftime('%Y-%m-%d')
+        all_queries.append(f"flipper created:>{date_str} archived:false")
+        all_queries.append(f"flipper pushed:>{date_str} archived:false")
+        all_queries.append(f"flipperzero created:>{date_str} archived:false")
+        all_queries.append(f"flipperzero pushed:>{date_str} archived:false")
+    
+    print(f"     → {len(date_configs) * 4} date queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 9. LICENSE (ALLE Lizenzen!)
+    # ────────────────────────────────────────────────────────
+    print("  9. Licenses...")
+    licenses = [
+        'mit', 'gpl', 'gpl-2.0', 'gpl-3.0', 'apache-2.0', 
+        'bsd', 'bsd-3-clause', 'unlicense', 'lgpl', 'mpl-2.0',
+        'cc0-1.0', 'wtfpl'
+    ]
+    
+    for lic in licenses:
+        all_queries.append(f"flipper license:{lic} archived:false")
+    
+    print(f"     → {len(licenses)} license queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 10. USER/ORG (ALLE bekannten Developer!)
+    # ────────────────────────────────────────────────────────
+    print("  10. Users/Organizations...")
+    users_orgs = [
+        'flipperdevices', 'DarkFlippers', 'RogueMaster', 
+        'Next-Flip', 'Flipper-XFW', 'xMasterX',
+        'RocketGod-git', 'UberGuidoZ', 'djsime1',
+        'jblanked', 'Willy-JL', 'ClaraCrazy',
+        'Lanjelin', 'eried', 'wetox-team',
+        'Lonebear69', 'Z3BRO', 'hak5',
+        'flipper-rs', 'instantiator', 'ebantula',
+        'skotopes', 'hedger', 'flipperdevices-team'
+    ]
+    
+    for user in users_orgs:
+        all_queries.append(f"user:{user} archived:false")
+        all_queries.append(f"org:{user} archived:false")
+    
+    print(f"     → {len(users_orgs) * 2} user/org queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 11. EXTENSION/FILENAME (ALLE Dateitypen!)
+    # ────────────────────────────────────────────────────────
+    print("  11. Extensions/Filenames...")
+    extensions = [
+        'fap', 'fam', 'sub', 'nfc', 'ir', 'ibtn', 
+        'c', 'h', 'py', 'js', 'sh', 'txt',
+        'md', 'yml', 'yaml', 'json', 'toml'
+    ]
+    
+    for ext in extensions:
+        all_queries.append(f"flipper extension:{ext} archived:false")
+    
+    filenames = [
+        'application.fam', 'manifest.yml', 'fap_manifest.yml',
+        'README.md', 'Makefile', 'CMakeLists.txt',
+        '.gitmodules', 'requirements.txt'
+    ]
+    
+    for fname in filenames:
+        all_queries.append(f"flipper filename:{fname} archived:false")
+    
+    print(f"     → {len(extensions) + len(filenames)} extension/filename queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 12. PATH (ALLE wichtigen Pfade!)
+    # ────────────────────────────────────────────────────────
+    print("  12. Paths...")
+    paths = [
+        'applications', 'apps', 'plugins', 'firmware', 
+        'lib', 'assets', 'src', 'include', 'docs',
+        'scripts', 'tools', 'targets', 'fbt'
+    ]
+    
+    for path in paths:
+        all_queries.append(f"flipper path:{path} archived:false")
+    
+    print(f"     → {len(paths)} path queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 13. SPECIAL Qualifiers
+    # ────────────────────────────────────────────────────────
+    print("  13. Special Qualifiers...")
+    
+    all_queries.append(f"flipper is:public archived:false")
+    all_queries.append(f"flipperzero NOT is:fork archived:false")
+    all_queries.append(f"flipper mirror:false archived:false")
+    all_queries.append(f"flipper template:false archived:false")
+    all_queries.append(f"flipper followers:>5 archived:false")
+    all_queries.append(f"flipper followers:>10 archived:false")
+    all_queries.append(f"flipper good-first-issues:>0 archived:false")
+    all_queries.append(f"flipper help-wanted-issues:>0 archived:false")
+    
+    print(f"     → 8 special queries")
+    
+    # ────────────────────────────────────────────────────────
+    # 14. MEGA KOMBINATIONEN (AND/OR)
+    # ────────────────────────────────────────────────────────
+    print("  14. Complex AND/OR Queries...")
+    
+    complex_queries = [
+        "(flipper OR flipperzero OR subghz OR nfc OR badusb OR rfid) AND archived:false",
+        "(flipper OR flipperzero) AND (language:C OR language:Python OR language:Rust) AND archived:false",
+        "(topic:flipperzero OR topic:flipper-plugin) AND stars:>5 AND archived:false",
+        "flipper AND (extension:fap OR extension:sub OR extension:nfc OR extension:ir) AND archived:false",
+        "(user:DarkFlippers OR user:RogueMaster OR user:Flipper-XFW) AND archived:false",
+        "flipper AND (in:name OR in:description) AND stars:>10 AND archived:false",
+        "(subghz OR nfc OR rfid OR badusb) AND language:C AND forks:>2 AND archived:false",
+        "flipper AND license:mit AND stars:>20 AND archived:false",
+        "(topic:firmware OR topic:plugin) AND flipper AND pushed:>2025-01-01 AND archived:false",
+        "flipper AND size:>1000 AND forks:>5 AND stars:>10 AND archived:false"
+    ]
+    
+    all_queries.extend(complex_queries)
+    print(f"     → {len(complex_queries)} complex queries")
     
     print("=" * 70)
-    print("🎯 FLIPPER ZERO BOT v10.0 - OPTIMIZED")
-    print("   RSS First + Smart API")
-    print("=" * 70 + "\n")
+    print(f"✅ TOTAL: {len(all_queries)} QUERIES GENERIERT!\n")
     
-    all_updates = []
+    return all_queries
+
+# ═══════════════════════════════════════════════════════════
+# EXECUTE ALL QUERIES (mit Fortschritt!)
+# ═══════════════════════════════════════════════════════════
+
+def execute_all_queries(queries: List[str], state: Dict) -> Set[str]:
+    """
+    Führt WIRKLICH ALLE Queries aus!
+    Zeigt Fortschritt an
+    """
+    print("\n🔍 STARTE VOLLSTÄNDIGE SUCHE...")
+    print("=" * 70)
     
-    # PHASE 1: RSS FEEDS (0 API - IMMER SICHER!)
-    print("📡 PHASE 1: RSS FEEDS (0 API)...\n")
+    all_repos = set()
+    total_queries = len(queries)
+    executed = 0
+    skipped = 0
     
-    # Priority Repos via RSS
-    for repo in PRIORITY_REPOS:
-        print(f"[RSS] {repo}")
-        updates = check_rss_releases(repo, state)
-        all_updates.extend(updates)
-        state['known_repos'].add(repo)
-        time.sleep(0.2)
+    start_time = time.time()
     
-    print(f"\n  ✅ RSS: {len(all_updates)} Updates (0 API calls!)")
+    for i, query in enumerate(queries, 1):
+        # Rate Limit Check alle 20 Queries
+        if i % 20 == 0:
+            if not check_rate_limit():
+                print(f"\n⚠️ Rate Limit zu niedrig! Pausiere 60s...")
+                time.sleep(60)
+                if not check_rate_limit():
+                    print(f"⚠️ Stoppe nach {executed} von {total_queries} Queries")
+                    break
+        
+        url = f"https://api.github.com/search/repositories?q={query}&per_page=100&sort=updated"
+        
+        try:
+            resp = requests.get(url, headers=get_headers(), timeout=20)
+            
+            if resp.status_code == 403:
+                print(f"\n[{i}/{total_queries}] ⚠️ 403 - Rate Limit exceeded!")
+                skipped += 1
+                time.sleep(10)
+                continue
+            
+            if resp.status_code == 422:
+                print(f"[{i}/{total_queries}] ⚠️ 422 - Invalid query: {query[:50]}")
+                skipped += 1
+                continue
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get('items', [])
+                total_count = data.get('total_count', 0)
+                new_repos = 0
+                
+                for item in items:
+                    repo_name = item['full_name']
+                    if repo_name not in all_repos:
+                        all_repos.add(repo_name)
+                        new_repos += 1
+                
+                # Zeige nur Queries mit neuen Ergebnissen
+                if new_repos > 0:
+                    print(f"[{i}/{total_queries}] ✅ +{new_repos} neue (total: {total_count}): {query[:55]}...")
+                elif i % 50 == 0:
+                    print(f"[{i}/{total_queries}] ⏭️  Progress: {len(all_repos)} repos total")
+                
+                executed += 1
+            
+            # Rate Limit Safety
+            time.sleep(2)
+        
+        except KeyboardInterrupt:
+            print(f"\n\n⚠️ ABGEBROCHEN nach {executed} Queries")
+            break
+        except Exception as e:
+            print(f"[{i}/{total_queries}] ❌ Error: {e}")
+            skipped += 1
+            continue
     
-    # PHASE 2: SMART API (nur wenn Rate Limit OK)
-    print(f"\n🔍 PHASE 2: SMART API SEARCH...\n")
+    elapsed = time.time() - start_time
     
-    new_repos = smart_search(state)
-    state['known_repos'].update(new_repos)
+    print("=" * 70)
+    print(f"✅ SUCHE ABGESCHLOSSEN!")
+    print(f"   Ausgeführt: {executed}/{total_queries} queries")
+    print(f"   Übersprungen: {skipped}")
+    print(f"   Gefundene Repos: {len(all_repos)}")
+    print(f"   Zeit: {int(elapsed/60)}min {int(elapsed%60)}s")
+    print("=" * 70)
     
-    # RSS für neue Rep
+    return all_repos
+
+# ═══════════════════════════════════════════════════════════
+# RSS C
