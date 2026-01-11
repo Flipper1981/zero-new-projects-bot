@@ -5,3 +5,4 @@ TOPIC_ID = os.environ.get("TOPIC_ID", "")
 # Mit:
 TELEGRAM_CHANNEL = "-1002829439594"  # Hardcoded
 TOPIC_ID = "186"                      # Hardcoded
+
