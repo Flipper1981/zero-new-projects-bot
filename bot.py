@@ -1,475 +1,232 @@
+#!/usr/bin/env python3
+"""
+TELEGRAM CONFIG TESTER
+Zeigt GENAU was falsch ist!
+"""
+
 import requests
 import os
-import time
 import json
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Set
-import xml.etree.ElementTree as ET
 
-# ═══════════════════════════════════════════════════════════
-# KONFIGURATION
-# ═══════════════════════════════════════════════════════════
-
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", "")
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
 TOPIC_ID = os.environ.get("TOPIC_ID", "")
-STATE_FILE = "flipper_v15_state.json"
 
-RELEASE_AGE_DAYS = int(os.environ.get("RELEASE_AGE_DAYS", "90"))
+print("=" * 70)
+print("🔍 TELEGRAM CONFIG DEBUG")
+print("=" * 70)
+print(f"\n📋 ENVIRONMENT VARIABLES:")
+print(f"   TELEGRAM_TOKEN: {TELEGRAM_TOKEN[:15]}...{TELEGRAM_TOKEN[-10:] if len(TELEGRAM_TOKEN) > 25 else '???'}")
+print(f"   CHANNEL_ID: '{CHANNEL_ID}'")
+print(f"   TOPIC_ID: '{TOPIC_ID}'")
+print()
 
-def get_headers():
-    h = {"Accept": "application/vnd.github.v3+json"}
-    if GITHUB_TOKEN:
-        h["Authorization"] = f"token {GITHUB_TOKEN}"
-    return h
+# Validierung
+errors = []
 
-def check_rate_limit():
-    try:
-        resp = requests.get("https://api.github.com/rate_limit", headers=get_headers(), timeout=10)
-        data = resp.json()
-        
-        core = data['resources']['core']
-        search = data['resources']['search']
-        
-        print(f"\n{'='*70}")
-        print(f"📊 RATE LIMIT STATUS:")
-        print(f"   Core API: {core['remaining']}/{core['limit']} remaining")
-        print(f"   Search API: {search['remaining']}/{search['limit']} remaining")
-        
-        if core['limit'] == 5000:
-            print(f"   ✅ TOKEN AKTIV! (5000/h)")
-        elif core['limit'] == 60:
-            print(f"   ⚠️ KEIN TOKEN - nur 60/h")
-        
-        print(f"{'='*70}\n")
-        
-        return search['remaining'] > 5
-    except Exception as e:
-        print(f"⚠️ Rate Limit Check failed: {e}")
-        return True
+if not TELEGRAM_TOKEN:
+    errors.append("❌ TELEGRAM_TOKEN ist leer!")
+elif not TELEGRAM_TOKEN.startswith("7"):
+    errors.append("⚠️ TELEGRAM_TOKEN sollte mit '7' starten!")
 
-def optimized_search() -> Set[str]:
-    print("\n🔍 OPTIMIERTE REPO SUCHE...\n")
-    all_repos = set()
-    
-    base_queries = [
-        "flipper archived:false",
-        "flipperzero archived:false",
-        "flipper-zero archived:false",
-        "topic:flipperzero",
-        "topic:flipper-zero",
-        "topic:flipper",
-        "topic:flipper-app",
-        "topic:flipper-plugin",
-        "subghz archived:false",
-        "flipper nfc archived:false",
-        "flipper badusb archived:false",
-        "flipper infrared archived:false",
-        "flipper rfid archived:false",
-        "flipper language:C archived:false",
-        "flipper language:Python archived:false",
-        "flipper language:Rust archived:false",
-        "unleashed firmware archived:false",
-        "roguemaster archived:false",
-        "momentum firmware flipper archived:false",
-        "xtreme firmware flipper archived:false",
-        "flipper stars:>5 archived:false",
-        "flipper stars:>20 archived:false",
-        "flipper stars:>50 archived:false",
-        "flipper forks:>3 archived:false",
-        "fap flipper archived:false",
-        "flipper application archived:false",
-        "flipper tool archived:false",
-        "flipper game archived:false",
-        "flipper esp32 archived:false",
-        "flipper gpio archived:false",
-        "flipper wifi archived:false",
-        "flipper sdk archived:false",
-        "flipper api archived:false",
-        "ufbt archived:false",
-        "flipper pushed:>2025-01-01 archived:false",
-        "flipper pushed:>2025-11-01 archived:false"
-    ]
-    
-    for i, query in enumerate(base_queries, 1):
-        url = f"https://api.github.com/search/repositories?q={query}&per_page=100&sort=updated"
-        
-        try:
-            resp = requests.get(url, headers=get_headers(), timeout=15)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get('items', [])
-                
-                new_repos = 0
-                for item in items:
-                    repo_name = item['full_name']
-                    if repo_name not in all_repos:
-                        all_repos.add(repo_name)
-                        new_repos += 1
-                
-                print(f"  [{i:2d}/{len(base_queries)}] {query[:50]:50s} → {new_repos:3d} neue | Total: {len(all_repos):4d}")
-            
-            elif resp.status_code == 403:
-                print(f"  ⚠️ Rate Limit erreicht!")
-                break
-            
-            time.sleep(2.5)
-            
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
-            continue
-    
-    print(f"\n  ✅ GEFUNDEN: {len(all_repos)} unique repos!\n")
-    return all_repos
+if not CHANNEL_ID:
+    errors.append("❌ CHANNEL_ID ist leer!")
+elif not CHANNEL_ID.startswith("-100"):
+    errors.append(f"❌ CHANNEL_ID muss mit -100 starten! Aktuell: {CHANNEL_ID}")
+    print(f"   💡 Korrigiere zu: -100{CHANNEL_ID}")
+    # Auto-fix
+    if CHANNEL_ID.isdigit():
+        CHANNEL_ID = f"-100{CHANNEL_ID}"
+        print(f"   ✅ Auto-korrigiert: {CHANNEL_ID}")
 
-def is_recent_release(published_str: str, days: int = RELEASE_AGE_DAYS) -> bool:
-    try:
-        if 'T' in published_str:
-            dt = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
-        else:
-            dt = datetime.strptime(published_str, '%Y-%m-%d %H:%M:%S')
-            dt = dt.replace(tzinfo=timezone.utc)
-        
-        now = datetime.now(timezone.utc)
-        age = now - dt
-        
-        return age.days <= days
-    except Exception:
-        return True
+if TOPIC_ID and not TOPIC_ID.isdigit():
+    errors.append(f"⚠️ TOPIC_ID sollte eine Zahl sein! Aktuell: {TOPIC_ID}")
 
-def check_rss_releases(repo: str, state: Dict, first_run: bool = False) -> List[Dict]:
-    updates = []
-    feed_url = f"https://github.com/{repo}/releases.atom"
-    
-    age_limit = 7 if first_run else RELEASE_AGE_DAYS
-    
-    try:
-        resp = requests.get(feed_url, timeout=8)
-        if resp.status_code != 200:
-            return []
-        
-        root = ET.fromstring(resp.content)
-        ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        
-        for entry in root.findall('atom:entry', ns)[:10]:
-            title_elem = entry.find('atom:title', ns)
-            link_elem = entry.find('atom:link', ns)
-            published_elem = entry.find('atom:published', ns)
-            
-            if title_elem is None or link_elem is None:
-                continue
-            
-            title = title_elem.text or ""
-            link = link_elem.get('href', '')
-            published = published_elem.text if published_elem is not None else ""
-            
-            if published and not is_recent_release(published, age_limit):
-                continue
-            
-            tag = title.split()[-1] if title else "unknown"
-            event_id = f"RSS:{repo}:{tag}"
-            
-            if event_id not in state.get('posted_events', set()):
-                updates.append({
-                    'type': 'RELEASE',
-                    'repo': repo,
-                    'tag': tag,
-                    'title': title,
-                    'url': link,
-                    'time': published[:19].replace('T', ' ') if published else '',
-                    'event_id': event_id
-                })
-        
-        time.sleep(0.1)
-        
-    except Exception:
-        pass
-    
-    return updates
+if errors:
+    print("⚠️ PROBLEME GEFUNDEN:")
+    for err in errors:
+        print(f"   {err}")
+    print()
 
-def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
-    first_run = len(state.get('posted_events', set())) == 0
-    
-    if first_run:
-        print(f"\n📡 RSS CHECK - FIRST RUN (nur letzte 7 Tage!)\n")
-    else:
-        print(f"\n📡 RSS RELEASE CHECK ({len(repos)} repos, letzte {RELEASE_AGE_DAYS} Tage)...\n")
-    
-    all_updates = []
-    
-    for i, repo in enumerate(sorted(repos), 1):
-        updates = check_rss_releases(repo, state, first_run)
-        
-        if updates:
-            print(f"  [{i:4d}] 🆕 {repo:50s} → {len(updates)} releases")
-            all_updates.extend(updates)
-        
-        if i % 100 == 0:
-            print(f"\n  📊 Progress: {i}/{len(repos)} repos, {len(all_updates)} updates\n")
-            time.sleep(1)
-    
-    print(f"\n  ✅ RSS CHECK COMPLETE: {len(all_updates)} neue Releases!\n")
-    
-    return all_updates
+print("=" * 70)
+print("📤 SENDE TEST-NACHRICHT...")
+print("=" * 70)
 
-def group_updates_by_repo(updates: List[Dict]) -> Dict[str, List[Dict]]:
-    grouped = {}
+# Test 1: Haupt-Channel (ohne Topic)
+def test_main_channel():
+    print("\n🧪 TEST 1: Haupt-Channel (ohne Topic ID)")
     
-    for update in updates:
-        repo = update.get('repo', '')
-        if repo not in grouped:
-            grouped[repo] = []
-        grouped[repo].append(update)
-    
-    for repo in grouped:
-        grouped[repo].sort(key=lambda x: x.get('time', ''), reverse=True)
-    
-    return grouped
+    msg = f"""🧪 <b>TEST 1: HAUPT-CHANNEL</b>
 
-def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL:
-        return False
-    
-    if not updates:
-        return False
-    
-    repo_url = f"https://github.com/{repo}"
-    count = len(updates)
-    
-    latest = updates[0]
-    latest_tag = latest.get('tag', 'unknown')
-    latest_time = latest.get('time', 'Jetzt')
-    latest_url = latest.get('url', repo_url)
-    
-    if count == 1:
-        msg = f"""🚀 <b>NEUE RELEASE!</b>
+Channel ID: <code>{CHANNEL_ID}</code>
+Topic ID: <b>NICHT GESETZT</b>
+Zeit: Jetzt
 
-📦 <a href="{repo_url}">{repo}</a>
-🏷️ <code>{latest_tag}</code>
-⏰ {latest_time}
-
-<a href="{latest_url}">📥 Release ansehen</a>"""
-    
-    else:
-        release_list = []
-        
-        for i, update in enumerate(updates[:10], 1):
-            tag = update.get('tag', 'unknown')
-            if i == 1:
-                release_list.append(f"🏷️ <code>{tag}</code> (neueste)")
-            else:
-                release_list.append(f"🏷️ <code>{tag}</code>")
-        
-        if count > 10:
-            release_list.append(f"<i>... und {count - 10} weitere</i>")
-        
-        releases_text = "\n".join(release_list)
-        
-        msg = f"""🚀 <b>{count} NEUE RELEASES!</b>
-
-📦 <a href="{repo_url}">{repo}</a>
-
-{releases_text}
-
-📅 Neueste: {latest_time}
-<a href="{latest_url}">📥 Alle Releases ansehen</a>"""
+Wenn du das siehst, ist CHANNEL_ID korrekt! ✅"""
     
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
     data = {
-        'chat_id': TELEGRAM_CHANNEL,
+        'chat_id': CHANNEL_ID,
         'text': msg,
-        'parse_mode': 'HTML',
-        'disable_web_page_preview': False
+        'parse_mode': 'HTML'
     }
     
-    # TOPIC_ID Support!
-    topic_id = TOPIC_ID or os.environ.get("THREAD_ID", "")
-    if topic_id:
-        try:
-            data['message_thread_id'] = int(topic_id)
-        except:
-            pass
+    print(f"   Chat ID: {data['chat_id']}")
+    print(f"   Sende...")
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            resp = requests.post(api_url, json=data, timeout=10)
-            
-            if resp.status_code == 200:
-                if count == 1:
-                    print(f"  ✅ Telegram: {repo} - {latest_tag}")
-                else:
-                    print(f"  ✅ Telegram: {repo} ({count} releases)")
-                time.sleep(3)
-                return True
-            
-            elif resp.status_code == 429:
-                retry_after = int(resp.headers.get('Retry-After', 60))
-                print(f"  ⏳ Rate Limit! Warte {retry_after}s...")
-                time.sleep(retry_after)
-                continue
-            
-            else:
-                error_msg = resp.json().get('description', 'Unknown')
-                print(f"  ❌ Telegram Error {resp.status_code}: {error_msg}")
-                return False
-                
-        except Exception as e:
-            print(f"  ❌ Telegram failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(5)
-                continue
+    try:
+        resp = requests.post(api_url, json=data, timeout=10)
+        
+        print(f"   Status: {resp.status_code}")
+        
+        if resp.status_code == 200:
+            result = resp.json()
+            chat = result['result']['chat']
+            print(f"   ✅ SUCCESS!")
+            print(f"   Chat Title: {chat.get('title', 'N/A')}")
+            print(f"   Chat Type: {chat.get('type', 'N/A')}")
+            print(f"   Message ID: {result['result']['message_id']}")
+            return True
+        else:
+            error = resp.json()
+            print(f"   ❌ FEHLER: {error.get('description', 'Unknown')}")
             return False
-    
-    return False
-
-def load_state() -> Dict:
-    try:
-        with open(STATE_FILE, 'r') as f:
-            s = json.load(f)
-            s['known_repos'] = set(s.get('known_repos', []))
-            s['posted_events'] = set(s.get('posted_events', []))
-            return s
-    except:
-        return {
-            'known_repos': set(),
-            'posted_events': set(),
-            'last_run': None,
-            'post_offset': 0
-        }
-
-def save_state(state: Dict):
-    try:
-        state_copy = state.copy()
-        state_copy['known_repos'] = sorted(list(state['known_repos']))
-        state_copy['posted_events'] = sorted(list(state['posted_events']))
-        state_copy['last_run'] = datetime.now(timezone.utc).isoformat()
-        
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state_copy, f, indent=2)
-        
-        print(f"  💾 State saved: {len(state['known_repos'])} repos, {len(state['posted_events'])} events")
+            
     except Exception as e:
-        print(f"  ⚠️ State save failed: {e}")
+        print(f"   ❌ Exception: {e}")
+        return False
 
-def main():
-    print("=" * 70)
-    print("🎯 FLIPPER ZERO BOT v15.2 FINAL")
-    print("=" * 70)
+# Test 2: Mit Topic ID
+def test_with_topic():
+    if not TOPIC_ID:
+        print("\n⏭️ TEST 2 übersprungen (TOPIC_ID nicht gesetzt)")
+        return False
     
-    if not TELEGRAM_TOKEN:
-        print("⚠️ TELEGRAM_TOKEN fehlt!")
-        return
+    print(f"\n🧪 TEST 2: Mit Topic ID = {TOPIC_ID}")
     
-    if not TELEGRAM_CHANNEL:
-        print("⚠️ CHANNEL_ID fehlt!")
-        return
-    
-    print(f"\n📱 Telegram Config:")
-    print(f"   Channel ID: {TELEGRAM_CHANNEL}")
-    print(f"   Topic ID: {TOPIC_ID if TOPIC_ID else 'Nicht gesetzt (Haupt-Channel)'}")
-    
-    state = load_state()
-    first_run = len(state.get('posted_events', set())) == 0
-    
-    print(f"\n📂 Loaded State:")
-    print(f"   Known Repos: {len(state['known_repos'])}")
-    print(f"   Posted Events: {len(state['posted_events'])}")
-    
-    if first_run:
-        print(f"   🆕 FIRST RUN - nur letzte 7 Tage!\n")
-    
-    if not check_rate_limit():
-        print("⚠️ Rate Limit zu niedrig - nur RSS Check")
-        new_repos = set()
-    else:
-        print("\n" + "=" * 70)
-        print("PHASE 1: REPOSITORY DISCOVERY")
-        print("=" * 70)
-        
-        new_repos = optimized_search()
-        
-        before_count = len(state['known_repos'])
-        state['known_repos'].update(new_repos)
-        after_count = len(state['known_repos'])
-        new_count = after_count - before_count
-        
-        print(f"\n📊 Repository Stats:")
-        print(f"   Neu gefunden: {new_count}")
-        print(f"   Gesamt bekannt: {after_count}")
-    
-    print("\n" + "=" * 70)
-    print("PHASE 2: RSS RELEASE CHECK")
-    print("=" * 70)
-    
-    all_updates = check_all_rss(state['known_repos'], state)
-    
-    unposted_updates = [
-        u for u in all_updates 
-        if u.get('event_id') not in state['posted_events']
-    ]
-    
-    print(f"\n  📋 Noch nicht gepostet: {len(unposted_updates)}/{len(all_updates)}")
-    
-    if unposted_updates:
-        print("\n" + "=" * 70)
-        print(f"PHASE 3: TELEGRAM POSTING (GROUPED)")
-        print("=" * 70 + "\n")
-        
-        grouped = group_updates_by_repo(unposted_updates)
-        
-        print(f"  📊 {len(unposted_updates)} updates von {len(grouped)} repos")
-        print(f"  ℹ️ Gruppiert: 1 Post pro Repo!\n")
-        
-        sorted_repos = sorted(
-            grouped.items(), 
-            key=lambda x: (-len(x[1]), x[0])
-        )
-        
-        BATCH_SIZE = 20
-        offset = state.get('post_offset', 0)
-        
-        batch_repos = sorted_repos[offset:offset + BATCH_SIZE]
-        
-        print(f"  📤 Poste Repos {offset+1} bis {offset+len(batch_repos)} von {len(sorted_repos)} total\n")
-        
-        posted_repos = 0
-        posted_releases = 0
-        failed = 0
-        
-        for repo_name, repo_updates in batch_repos:
-            if post_repo_updates_to_telegram(repo_name, repo_updates):
-                posted_repos += 1
-                posted_releases += len(repo_updates)
-                
-                for update in repo_updates:
-                    state['posted_events'].add(update.get('event_id'))
-            else:
-                failed += 1
-                if failed >= 3:
-                    print(f"\n  ⚠️ Zu viele Fehler!\n")
-                    break
-        
-        if posted_repos > 0:
-            state['post_offset'] = offset + posted_repos
-        
-        if state['post_offset'] >= len(sorted_repos):
-            state['post_offset'] = 0
-            print(f"\n  ✅ Alle Repos gepostet! Offset reset.\n")
-        
-        print(f"\n  ✅ Posted: {posted_repos} repos, {posted_releases} releases")
-    else:
-        print("\n  ℹ️ Keine neuen Updates zum Posten")
-    
-    print("\n" + "=" * 70)
-    save_state(state)
-    
-    print("\n" + "=" * 70)
-    print("✅ BOT RUN COMPLETE!")
-    print("=" * 70 + "\n")
+    msg = f"""🧪 <b>TEST 2: MIT TOPIC</b>
 
-if __name__ == "__main__":
-    main()
+Channel ID: <code>{CHANNEL_ID}</code>
+Topic ID: <code>{TOPIC_ID}</code>
+Zeit: Jetzt
+
+Wenn du das im RICHTIGEN TOPIC siehst: ✅
+Wenn du das im FALSCHEN TOPIC siehst: ❌"""
+    
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    data = {
+        'chat_id': CHANNEL_ID,
+        'text': msg,
+        'parse_mode': 'HTML',
+        'message_thread_id': int(TOPIC_ID)
+    }
+    
+    print(f"   Chat ID: {data['chat_id']}")
+    print(f"   Topic ID: {data['message_thread_id']}")
+    print(f"   Sende...")
+    
+    try:
+        resp = requests.post(api_url, json=data, timeout=10)
+        
+        print(f"   Status: {resp.status_code}")
+        
+        if resp.status_code == 200:
+            result = resp.json()
+            print(f"   ✅ SUCCESS!")
+            print(f"   Message ID: {result['result']['message_id']}")
+            if 'message_thread_id' in result['result']:
+                print(f"   Thread ID in Response: {result['result']['message_thread_id']}")
+            return True
+        else:
+            error = resp.json()
+            print(f"   ❌ FEHLER: {error.get('description', 'Unknown')}")
+            
+            desc = error.get('description', '').lower()
+            if 'thread' in desc or 'topic' in desc:
+                print(f"\n   💡 TOPIC_ID {TOPIC_ID} ist FALSCH!")
+                print(f"   💡 Finde die richtige Topic ID:")
+                print(f"      1. Forwarde Nachricht aus richtigem Topic an @userinfobot")
+                print(f"      2. Bot zeigt die Topic ID")
+            
+            return False
+            
+    except Exception as e:
+        print(f"   ❌ Exception: {e}")
+        return False
+
+# Test 3: Bot Info
+def test_bot_info():
+    print("\n🤖 BOT INFO:")
+    
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe"
+    
+    try:
+        resp = requests.get(api_url, timeout=10)
+        
+        if resp.status_code == 200:
+            bot = resp.json()['result']
+            print(f"   Bot Name: @{bot.get('username', 'N/A')}")
+            print(f"   Bot ID: {bot.get('id', 'N/A')}")
+            print(f"   Can Join Groups: {bot.get('can_join_groups', False)}")
+            return True
+        else:
+            print(f"   ❌ Token ungültig!")
+            return False
+            
+    except Exception as e:
+        print(f"   ❌ Exception: {e}")
+        return False
+
+# TESTS AUSFÜHREN
+print()
+test_bot_info()
+result1 = test_main_channel()
+result2 = test_with_topic()
+
+print("\n" + "=" * 70)
+print("📊 ERGEBNISSE:")
+print("=" * 70)
+print(f"   Test 1 (Haupt-Channel): {'✅ OK' if result1 else '❌ FEHLER'}")
+print(f"   Test 2 (Mit Topic):      {'✅ OK' if result2 else '❌ FEHLER' if TOPIC_ID else '⏭️ Übersprungen'}")
+print()
+
+if result1 and not result2 and TOPIC_ID:
+    print("💡 DIAGNOSE:")
+    print("   ✅ CHANNEL_ID ist korrekt")
+    print("   ❌ TOPIC_ID ist FALSCH!")
+    print()
+    print("   🔧 LÖSUNG:")
+    print("   1. Gehe zu deinem Telegram Channel")
+    print("   2. Öffne das RICHTIGE Topic")
+    print("   3. Forwarde eine Nachricht an @userinfobot")
+    print("   4. Bot zeigt: 'Message thread identifier: XXX'")
+    print("   5. Setze TOPIC_ID = XXX in GitHub Secrets")
+    print()
+
+elif not result1:
+    print("💡 DIAGNOSE:")
+    print("   ❌ CHANNEL_ID ist FALSCH!")
+    print()
+    print("   🔧 LÖSUNG:")
+    print("   1. Füge @userinfobot zu deinem Channel hinzu")
+    print("   2. Schreibe eine Nachricht im Channel")
+    print("   3. Bot zeigt: 'Chat: -100XXXXXXXXXX'")
+    print("   4. Setze CHANNEL_ID = -100XXXXXXXXXX in GitHub Secrets")
+    print()
+    print(f"   📝 Deine aktuelle CHANNEL_ID: {CHANNEL_ID}")
+    print(f"   📝 Sollte sein: -1002829439594 (aus deinem Link)")
+    print()
+
+else:
+    print("✅ ALLES OK!")
+    print("   Beide Tests erfolgreich!")
+    print()
+
+print("=" * 70)
+print("🔍 CHECK DEINE TELEGRAM-NACHRICHTEN!")
+print("=" * 70)
+print("   Wo sind die Test-Nachrichten gelandet?")
+print("   → Das zeigt dir welcher Channel/Topic aktuell verwendet wird!")
+print("=" * 70)
