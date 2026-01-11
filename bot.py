@@ -13,21 +13,18 @@ import xml.etree.ElementTree as ET
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", "")
-TOPIC_ID = os.environ.get("TOPIC_ID", "")  # v14 Kompatibilität!
-STATE_FILE = "flipper_v15_state.json"  # Im Repo Root (bleibt erhalten)
+TOPIC_ID = os.environ.get("TOPIC_ID", "")
+STATE_FILE = "flipper_v15_state.json"
 
-# WICHTIG: Nur Releases der letzten X Tage posten
-RELEASE_AGE_DAYS = int(os.environ.get("RELEASE_AGE_DAYS", "90"))  # Default: 90 Tage
+RELEASE_AGE_DAYS = int(os.environ.get("RELEASE_AGE_DAYS", "90"))
 
 def get_headers():
-    """Headers mit Token"""
     h = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         h["Authorization"] = f"token {GITHUB_TOKEN}"
     return h
 
 def check_rate_limit():
-    """Rate Limit Status prüfen"""
     try:
         resp = requests.get("https://api.github.com/rate_limit", headers=get_headers(), timeout=10)
         data = resp.json()
@@ -44,8 +41,6 @@ def check_rate_limit():
             print(f"   ✅ TOKEN AKTIV! (5000/h)")
         elif core['limit'] == 60:
             print(f"   ⚠️ KEIN TOKEN - nur 60/h")
-        else:
-            print(f"   ℹ️ Limit: {core['limit']}/h")
         
         print(f"{'='*70}\n")
         
@@ -54,12 +49,7 @@ def check_rate_limit():
         print(f"⚠️ Rate Limit Check failed: {e}")
         return True
 
-# ═══════════════════════════════════════════════════════════
-# OPTIMIERTE BREITE SUCHE
-# ═══════════════════════════════════════════════════════════
-
 def optimized_search() -> Set[str]:
-    """Breite effiziente Queries - findet 597+ Repos"""
     print("\n🔍 OPTIMIERTE REPO SUCHE...\n")
     all_repos = set()
     
@@ -134,21 +124,8 @@ def optimized_search() -> Set[str]:
     print(f"\n  ✅ GEFUNDEN: {len(all_repos)} unique repos!\n")
     return all_repos
 
-# ═══════════════════════════════════════════════════════════
-# RSS FEEDS MIT ZEIT-FILTER
-# ═══════════════════════════════════════════════════════════
-
 def is_recent_release(published_str: str, days: int = RELEASE_AGE_DAYS) -> bool:
-    """
-    Check ob Release aktuell genug ist
-    
-    published_str: "2026-01-11T10:30:00Z" oder "2026-01-11 10:30:00"
-    days: Max Alter in Tagen
-    
-    Returns: True wenn Release neuer als X Tage
-    """
     try:
-        # Parse verschiedene Formate
         if 'T' in published_str:
             dt = datetime.fromisoformat(published_str.replace('Z', '+00:00'))
         else:
@@ -159,20 +136,13 @@ def is_recent_release(published_str: str, days: int = RELEASE_AGE_DAYS) -> bool:
         age = now - dt
         
         return age.days <= days
-    except Exception as e:
-        # Bei Parse-Fehler: Lieber posten als übersehen
+    except Exception:
         return True
 
 def check_rss_releases(repo: str, state: Dict, first_run: bool = False) -> List[Dict]:
-    """
-    RSS Feed Check mit Zeit-Filter
-    
-    first_run: Bei erstem Run NUR letzte 7 Tage (sonst Spam!)
-    """
     updates = []
     feed_url = f"https://github.com/{repo}/releases.atom"
     
-    # First Run: Nur 7 Tage, sonst normaler Filter
     age_limit = 7 if first_run else RELEASE_AGE_DAYS
     
     try:
@@ -183,7 +153,7 @@ def check_rss_releases(repo: str, state: Dict, first_run: bool = False) -> List[
         root = ET.fromstring(resp.content)
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
         
-        for entry in root.findall('atom:entry', ns)[:10]:  # Max 10 neueste
+        for entry in root.findall('atom:entry', ns)[:10]:
             title_elem = entry.find('atom:title', ns)
             link_elem = entry.find('atom:link', ns)
             published_elem = entry.find('atom:published', ns)
@@ -195,14 +165,12 @@ def check_rss_releases(repo: str, state: Dict, first_run: bool = False) -> List[
             link = link_elem.get('href', '')
             published = published_elem.text if published_elem is not None else ""
             
-            # ZEIT-FILTER: Nur aktuelle Releases!
             if published and not is_recent_release(published, age_limit):
-                continue  # Skip alte Releases
+                continue
             
             tag = title.split()[-1] if title else "unknown"
             event_id = f"RSS:{repo}:{tag}"
             
-            # Nur neue Events
             if event_id not in state.get('posted_events', set()):
                 updates.append({
                     'type': 'RELEASE',
@@ -222,14 +190,10 @@ def check_rss_releases(repo: str, state: Dict, first_run: bool = False) -> List[
     return updates
 
 def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
-    """RSS Check für alle Repos"""
-    
-    # Detect First Run
     first_run = len(state.get('posted_events', set())) == 0
     
     if first_run:
-        print(f"\n📡 RSS CHECK - FIRST RUN (nur letzte 7 Tage!)")
-        print(f"   (Verhindert Spam von alten Releases)\n")
+        print(f"\n📡 RSS CHECK - FIRST RUN (nur letzte 7 Tage!)\n")
     else:
         print(f"\n📡 RSS RELEASE CHECK ({len(repos)} repos, letzte {RELEASE_AGE_DAYS} Tage)...\n")
     
@@ -248,20 +212,9 @@ def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
     
     print(f"\n  ✅ RSS CHECK COMPLETE: {len(all_updates)} neue Releases!\n")
     
-    if first_run:
-        print(f"  ℹ️ First Run: Alte Releases gefiltert (nur 7 Tage)")
-        print(f"  ℹ️ Nächste Runs: Normale {RELEASE_AGE_DAYS} Tage Filter\n")
-    
     return all_updates
 
-# ═══════════════════════════════════════════════════════════
-# GRUPPIERUNG NACH REPO
-# ═══════════════════════════════════════════════════════════
-
 def group_updates_by_repo(updates: List[Dict]) -> Dict[str, List[Dict]]:
-    """
-    Gruppiert Updates nach Repository
-    """
     grouped = {}
     
     for update in updates:
@@ -270,34 +223,12 @@ def group_updates_by_repo(updates: List[Dict]) -> Dict[str, List[Dict]]:
             grouped[repo] = []
         grouped[repo].append(update)
     
-    # Sortiere Releases pro Repo (neueste zuerst)
     for repo in grouped:
         grouped[repo].sort(key=lambda x: x.get('time', ''), reverse=True)
     
     return grouped
 
-# ═══════════════════════════════════════════════════════════
-# TELEGRAM - GROUPED POSTS MIT TOPIC_ID SUPPORT!
-# ═══════════════════════════════════════════════════════════
-
 def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
-    """
-    Post ALLE Updates eines Repos in EINEM Post
-    
-    1 Release:
-    🚀 NEUE RELEASE!
-    📦 repo
-    🏷️ v1.0
-    
-    Mehrere Releases:
-    🚀 5 NEUE RELEASES!
-    📦 repo
-    🏷️ v1.5 (neueste)
-    🏷️ v1.4
-    🏷️ v1.3
-    🏷️ v1.2
-    🏷️ v1.1
-    """
     if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL:
         return False
     
@@ -307,15 +238,12 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
     repo_url = f"https://github.com/{repo}"
     count = len(updates)
     
-    # Neueste Release Info (updates ist bereits sortiert!)
     latest = updates[0]
     latest_tag = latest.get('tag', 'unknown')
     latest_time = latest.get('time', 'Jetzt')
     latest_url = latest.get('url', repo_url)
     
-    # Baue Release Liste
     if count == 1:
-        # Einzelnes Release: Klassisches Format
         msg = f"""🚀 <b>NEUE RELEASE!</b>
 
 📦 <a href="{repo_url}">{repo}</a>
@@ -325,17 +253,15 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
 <a href="{latest_url}">📥 Release ansehen</a>"""
     
     else:
-        # Multiple Releases: Gruppiert
         release_list = []
         
-        for i, update in enumerate(updates[:10], 1):  # Max 10 anzeigen
+        for i, update in enumerate(updates[:10], 1):
             tag = update.get('tag', 'unknown')
             if i == 1:
                 release_list.append(f"🏷️ <code>{tag}</code> (neueste)")
             else:
                 release_list.append(f"🏷️ <code>{tag}</code>")
         
-        # Mehr als 10? Hinweis
         if count > 10:
             release_list.append(f"<i>... und {count - 10} weitere</i>")
         
@@ -359,7 +285,7 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
         'disable_web_page_preview': False
     }
     
-    # WICHTIG: TOPIC_ID Support (v14 Kompatibilität!)
+    # TOPIC_ID Support!
     topic_id = TOPIC_ID or os.environ.get("THREAD_ID", "")
     if topic_id:
         try:
@@ -367,7 +293,6 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
         except:
             pass
     
-    # POST mit Retry
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -378,7 +303,7 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
                     print(f"  ✅ Telegram: {repo} - {latest_tag}")
                 else:
                     print(f"  ✅ Telegram: {repo} ({count} releases)")
-                time.sleep(3)  # Rate Limit Safe: 20 msg/min
+                time.sleep(3)
                 return True
             
             elif resp.status_code == 429:
@@ -390,10 +315,6 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
             else:
                 error_msg = resp.json().get('description', 'Unknown')
                 print(f"  ❌ Telegram Error {resp.status_code}: {error_msg}")
-                
-                if "chat not found" in error_msg.lower():
-                    print(f"\n  ⚠️⚠️⚠️ FALSCHER CHANNEL! Check CHANNEL_ID! ⚠️⚠️⚠️\n")
-                
                 return False
                 
         except Exception as e:
@@ -405,12 +326,7 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
     
     return False
 
-# ═══════════════════════════════════════════════════════════
-# STATE MANAGEMENT
-# ═══════════════════════════════════════════════════════════
-
 def load_state() -> Dict:
-    """Load persistent state"""
     try:
         with open(STATE_FILE, 'r') as f:
             s = json.load(f)
@@ -426,7 +342,6 @@ def load_state() -> Dict:
         }
 
 def save_state(state: Dict):
-    """Save persistent state"""
     try:
         state_copy = state.copy()
         state_copy['known_repos'] = sorted(list(state['known_repos']))
@@ -440,18 +355,11 @@ def save_state(state: Dict):
     except Exception as e:
         print(f"  ⚠️ State save failed: {e}")
 
-# ═══════════════════════════════════════════════════════════
-# MAIN BOT
-# ═══════════════════════════════════════════════════════════
-
 def main():
-    """Main Bot Execution"""
-    
     print("=" * 70)
-    print("🎯 FLIPPER ZERO BOT v15.2 FINAL - TOPIC_ID SUPPORT")
+    print("🎯 FLIPPER ZERO BOT v15.2 FINAL")
     print("=" * 70)
     
-    # Validate Config
     if not TELEGRAM_TOKEN:
         print("⚠️ TELEGRAM_TOKEN fehlt!")
         return
@@ -460,36 +368,24 @@ def main():
         print("⚠️ CHANNEL_ID fehlt!")
         return
     
-    if not TELEGRAM_CHANNEL.startswith("-100"):
-        print(f"⚠️ WARNUNG: CHANNEL_ID sollte mit -100 starten!")
-        print(f"   Aktuell: {TELEGRAM_CHANNEL}\n")
+    print(f"\n📱 Telegram Config:")
+    print(f"   Channel ID: {TELEGRAM_CHANNEL}")
+    print(f"   Topic ID: {TOPIC_ID if TOPIC_ID else 'Nicht gesetzt (Haupt-Channel)'}")
     
-    # Zeige TOPIC_ID wenn gesetzt
-    if TOPIC_ID:
-        print(f"  ℹ️ TOPIC_ID gesetzt: {TOPIC_ID}")
-        print(f"  ℹ️ Posts gehen ins Topic/Thread!\n")
-    
-    # Load State
     state = load_state()
     first_run = len(state.get('posted_events', set())) == 0
     
     print(f"\n📂 Loaded State:")
     print(f"   Known Repos: {len(state['known_repos'])}")
     print(f"   Posted Events: {len(state['posted_events'])}")
-    print(f"   Post Offset: {state.get('post_offset', 0)}")
     
     if first_run:
-        print(f"   🆕 FIRST RUN DETECTED!")
-        print(f"   ℹ️ Nur Releases der letzten 7 Tage werden gepostet\n")
-    else:
-        print(f"   ℹ️ Release Filter: Letzte {RELEASE_AGE_DAYS} Tage\n")
+        print(f"   🆕 FIRST RUN - nur letzte 7 Tage!\n")
     
-    # Rate Limit Check
     if not check_rate_limit():
         print("⚠️ Rate Limit zu niedrig - nur RSS Check")
         new_repos = set()
     else:
-        # PHASE 1: Repository Discovery
         print("\n" + "=" * 70)
         print("PHASE 1: REPOSITORY DISCOVERY")
         print("=" * 70)
@@ -505,14 +401,12 @@ def main():
         print(f"   Neu gefunden: {new_count}")
         print(f"   Gesamt bekannt: {after_count}")
     
-    # PHASE 2: RSS Release Check mit Zeit-Filter
     print("\n" + "=" * 70)
-    print("PHASE 2: RSS RELEASE CHECK (ZEIT-GEFILTERT)")
+    print("PHASE 2: RSS RELEASE CHECK")
     print("=" * 70)
     
     all_updates = check_all_rss(state['known_repos'], state)
     
-    # Filter: Nur noch nicht gepostete
     unposted_updates = [
         u for u in all_updates 
         if u.get('event_id') not in state['posted_events']
@@ -520,32 +414,21 @@ def main():
     
     print(f"\n  📋 Noch nicht gepostet: {len(unposted_updates)}/{len(all_updates)}")
     
-    # PHASE 3: Telegram Posting (GROUPED!)
     if unposted_updates:
         print("\n" + "=" * 70)
         print(f"PHASE 3: TELEGRAM POSTING (GROUPED)")
         print("=" * 70 + "\n")
         
-        # GRUPPIERE NACH REPO
         grouped = group_updates_by_repo(unposted_updates)
         
         print(f"  📊 {len(unposted_updates)} updates von {len(grouped)} repos")
-        print(f"  ℹ️ Gruppiert: 1 Post pro Repo (statt {len(unposted_updates)} Posts!)\n")
+        print(f"  ℹ️ Gruppiert: 1 Post pro Repo!\n")
         
-        # Sortiere Repos (meiste Releases zuerst, dann alphabetisch)
         sorted_repos = sorted(
             grouped.items(), 
             key=lambda x: (-len(x[1]), x[0])
         )
         
-        # Zeige Top 10 Repos mit meisten Releases
-        if len(sorted_repos) > 0:
-            print(f"  🔝 Top Repos mit meisten Releases:")
-            for repo, updates in sorted_repos[:10]:
-                print(f"     {repo:50s} → {len(updates)} releases")
-            print()
-        
-        # BATCH: Max 20 REPOS/run
         BATCH_SIZE = 20
         offset = state.get('post_offset', 0)
         
@@ -562,50 +445,30 @@ def main():
                 posted_repos += 1
                 posted_releases += len(repo_updates)
                 
-                # Mark ALLE Releases dieses Repos als gepostet
                 for update in repo_updates:
                     state['posted_events'].add(update.get('event_id'))
             else:
                 failed += 1
                 if failed >= 3:
-                    print(f"\n  ⚠️ Zu viele Fehler - Check Config!\n")
+                    print(f"\n  ⚠️ Zu viele Fehler!\n")
                     break
-            
-            # Progress
-            if posted_repos % 5 == 0:
-                print(f"\n  📊 {posted_repos} repos, {posted_releases} releases posted\n")
         
-        # Update Offset
         if posted_repos > 0:
             state['post_offset'] = offset + posted_repos
         
-        # Reset wenn fertig
         if state['post_offset'] >= len(sorted_repos):
             state['post_offset'] = 0
             print(f"\n  ✅ Alle Repos gepostet! Offset reset.\n")
         
         print(f"\n  ✅ Posted: {posted_repos} repos, {posted_releases} releases")
-        print(f"  ℹ️ Nächster Run: Repo #{state['post_offset']+1}")
     else:
         print("\n  ℹ️ Keine neuen Updates zum Posten")
     
-    # Save State
     print("\n" + "=" * 70)
     save_state(state)
     
-    # Final Summary
     print("\n" + "=" * 70)
     print("✅ BOT RUN COMPLETE!")
-    print("=" * 70)
-    print(f"   Known Repos: {len(state['known_repos'])}")
-    print(f"   Total Releases Found: {len(all_updates)}")
-    print(f"   Posted This Run: {posted_repos if unposted_updates else 0} repos / {posted_releases if unposted_updates else 0} releases")
-    print(f"   Total Events Tracked: {len(state['posted_events'])}")
-    
-    if unposted_updates:
-        pending = len(grouped) - state.get('post_offset', 0)
-        print(f"   Pending Repos: {pending}")
-    
     print("=" * 70 + "\n")
 
 if __name__ == "__main__":
