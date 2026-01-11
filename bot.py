@@ -1,18 +1,19 @@
 import requests
 import os
-import json
 import time
-import re
+import json
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Set
-from collections import defaultdict
+import xml.etree.ElementTree as ET
 
 # ═══════════════════════════════════════════════════════════
 # KONFIGURATION
 # ═══════════════════════════════════════════════════════════
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-STATE_FILE = "/tmp/flipper_mega_state.json"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", "")
+STATE_FILE = "/tmp/flipper_v15_state.json"
 
 def get_headers():
     """Headers mit Token"""
@@ -22,7 +23,7 @@ def get_headers():
     return h
 
 def check_rate_limit():
-    """Prüfe Rate Limit Status"""
+    """Rate Limit Status prüfen"""
     try:
         resp = requests.get("https://api.github.com/rate_limit", headers=get_headers(), timeout=10)
         data = resp.json()
@@ -36,7 +37,7 @@ def check_rate_limit():
         print(f"   Search API: {search['remaining']}/{search['limit']} remaining")
         
         if core['limit'] == 5000:
-            print(f"   ✅ TOKEN FUNKTIONIERT! (5000/h)")
+            print(f"   ✅ TOKEN AKTIV! (5000/h)")
         elif core['limit'] == 60:
             print(f"   ⚠️ KEIN TOKEN - nur 60/h")
         else:
@@ -50,554 +51,349 @@ def check_rate_limit():
         return True
 
 # ═══════════════════════════════════════════════════════════
-# 1. 1000-RESULT-LIMIT WORKAROUND (Date + Size Slicing)
+# OPTIMIERTE BREITE SUCHE (500+ Repos!)
 # ═══════════════════════════════════════════════════════════
 
-def break_1000_limit_search(base_query: str) -> Set[str]:
+def optimized_search() -> Set[str]:
     """
-    UMGEHT das 1000-Result-Limit durch:
-    - Date Slicing (monatlich, wöchentlich, täglich)
-    - Size Slicing (KB-Ranges)
-    - Kombinationen
-    
-    Findet ALLE Repos statt nur 1000!
+    Breite effiziente Queries
+    Findet 500+ Repos in 5-10min!
     """
-    print(f"\n🔓 BREAKING 1000-LIMIT: {base_query[:50]}...")
+    print("\n🔍 OPTIMIERTE REPO SUCHE...")
     all_repos = set()
     
-    # ────────────────────────────────────────────────────────
-    # METHOD 1: DATE SLICING (nach Monat/Woche/Tag)
-    # ────────────────────────────────────────────────────────
-    
-    now = datetime.now(timezone.utc)
-    start_year = 2020  # Flipper Zero Launch
-    
-    # MONTHLY SLICES
-    for year in range(start_year, now.year + 1):
-        for month in range(1, 13):
-            if year == now.year and month > now.month:
-                break
-            
-            month_start = f"{year}-{month:02d}-01"
-            if month == 12:
-                month_end = f"{year + 1}-01-01"
-            else:
-                month_end = f"{year}-{month + 1:02d}-01"
-            
-            query = f"{base_query} created:{month_start}..{month_end}"
-            repos = execute_single_search(query)
-            
-            # Wenn > 900 Results → WEEKLY SLICE!
-            if len(repos) > 900:
-                print(f"    ⚠️ {month_start}: {len(repos)} results → WEEKLY SLICE")
-                repos = weekly_slice(base_query, year, month)
-            
-            all_repos.update(repos)
-            print(f"    📅 {month_start}: +{len(repos)} repos (total: {len(all_repos)})")
-            time.sleep(1)
-    
-    # ────────────────────────────────────────────────────────
-    # METHOD 2: SIZE SLICING (paralleles Suchen)
-    # ────────────────────────────────────────────────────────
-    
-    size_ranges = [
-        '<10', '10..50', '50..100', '100..200', '200..500',
-        '500..1000', '1000..2000', '2000..5000', '5000..10000',
-        '10000..20000', '20000..50000', '>50000'
+    # BREITE BASE-QUERIES (maximale Abdeckung)
+    base_queries = [
+        # Hauptbegriffe
+        "flipper archived:false",
+        "flipperzero archived:false",
+        "flipper-zero archived:false",
+        
+        # Topics (sehr effektiv!)
+        "topic:flipperzero",
+        "topic:flipper-zero",
+        "topic:flipper",
+        "topic:flipper-app",
+        "topic:flipper-plugin",
+        
+        # Kategorien
+        "subghz archived:false",
+        "flipper nfc archived:false",
+        "flipper badusb archived:false",
+        "flipper infrared archived:false",
+        "flipper rfid archived:false",
+        
+        # Languages (findet Code-Repos)
+        "flipper language:C archived:false",
+        "flipper language:Python archived:false",
+        "flipper language:Rust archived:false",
+        
+        # Firmware Variants
+        "unleashed firmware archived:false",
+        "roguemaster archived:false",
+        "momentum firmware flipper archived:false",
+        "xtreme firmware flipper archived:false",
+        
+        # Qualität
+        "flipper stars:>5 archived:false",
+        "flipper stars:>20 archived:false",
+        "flipper stars:>50 archived:false",
+        "flipper forks:>3 archived:false",
+        
+        # Apps & Tools
+        "fap flipper archived:false",
+        "flipper application archived:false",
+        "flipper tool archived:false",
+        "flipper game archived:false",
+        
+        # Hardware
+        "flipper esp32 archived:false",
+        "flipper gpio archived:false",
+        "flipper wifi archived:false",
+        
+        # Development
+        "flipper sdk archived:false",
+        "flipper api archived:false",
+        "ufbt archived:false",
+        
+        # Recent Activity
+        "flipper pushed:>2025-12-01 archived:false",
+        "flipper pushed:>2026-01-01 archived:false"
     ]
     
-    for size_range in size_ranges:
-        query = f"{base_query} size:{size_range}"
-        repos = execute_single_search(query)
-        new_count = len(repos - all_repos)
-        
-        if new_count > 0:
-            all_repos.update(repos)
-            print(f"    📦 size:{size_range}: +{new_count} new repos")
-        
-        time.sleep(1)
-    
-    print(f"  ✅ TOTAL: {len(all_repos)} repos (broke 1000 limit!)\n")
-    return all_repos
-
-def weekly_slice(base_query: str, year: int, month: int) -> Set[str]:
-    """Wöchentliche Slices für dichte Monate"""
-    repos = set()
-    
-    import calendar
-    days_in_month = calendar.monthrange(year, month)[1]
-    
-    for day_start in range(1, days_in_month, 7):
-        day_end = min(day_start + 6, days_in_month)
-        
-        date_start = f"{year}-{month:02d}-{day_start:02d}"
-        date_end = f"{year}-{month:02d}-{day_end:02d}"
-        
-        query = f"{base_query} created:{date_start}..{date_end}"
-        week_repos = execute_single_search(query)
-        repos.update(week_repos)
-        
-        time.sleep(0.5)
-    
-    return repos
-
-def execute_single_search(query: str, max_pages: int = 10) -> Set[str]:
-    """Einzelne Search mit Pagination"""
-    repos = set()
-    
-    for page in range(1, max_pages + 1):
-        url = f"https://api.github.com/search/repositories?q={query}&per_page=100&page={page}"
+    for i, query in enumerate(base_queries, 1):
+        url = f"https://api.github.com/search/repositories?q={query}&per_page=100&sort=updated"
         
         try:
             resp = requests.get(url, headers=get_headers(), timeout=15)
             
-            if resp.status_code != 200:
-                break
-            
-            data = resp.json()
-            items = data.get('items', [])
-            
-            if not items:
-                break
-            
-            for item in items:
-                repos.add(item['full_name'])
-            
-            # Wenn < 100, das war die letzte Seite
-            if len(items) < 100:
-                break
-        
-        except:
-            break
-        
-        time.sleep(0.3)
-    
-    return repos
-
-# ═══════════════════════════════════════════════════════════
-# 2. ULTRA TOPIC COMBINATIONS (Machine Learning-ähnlich)
-# ═══════════════════════════════════════════════════════════
-
-def discover_topic_combinations(state: Dict) -> List[str]:
-    """
-    Intelligente Topic-Kombinationen basierend auf:
-    - Co-Occurrence (welche Topics oft zusammen vorkommen)
-    - Semantic Similarity
-    - Frequency Analysis
-    """
-    print("\n🧠 INTELLIGENT TOPIC DISCOVERY...")
-    
-    all_queries = []
-    
-    # ────────────────────────────────────────────────────────
-    # BASE TOPICS (kategorisiert)
-    # ────────────────────────────────────────────────────────
-    
-    topic_categories = {
-        'device': [
-            'flipperzero', 'flipper-zero', 'flipper', 'flipper0',
-            'flipper-device', 'flipper-one'
-        ],
-        'wireless': [
-            'subghz', 'sub-ghz', '433mhz', '315mhz', '868mhz', '915mhz',
-            'rf', 'radio', 'wireless', 'remote', 'transmitter', 'receiver',
-            'ask', 'fsk', 'ook', 'gfsk', 'rolling-code', 'static-code'
-        ],
-        'nfc': [
-            'nfc', 'nfc-a', 'nfc-b', 'nfc-v', 'nfc-f',
-            'mifare', 'ntag', 'ultralight', 'desfire', 'felica',
-            'iso14443', 'iso15693', 'nfc-card', 'nfc-tag', 'emv'
-        ],
-        'rfid': [
-            'rfid', 'lf-rfid', 'hf-rfid', 'em4100', 'em4102', 'em4305',
-            'hid', 'indala', 't5577', 'fdx-b', '125khz', '13.56mhz'
-        ],
-        'infrared': [
-            'infrared', 'ir', 'ir-remote', 'ir-blaster', 'lirc',
-            'tv-remote', 'ac-remote', 'universal-remote', 'pronto'
-        ],
-        'ibutton': [
-            'ibutton', 'dallas-key', 'one-wire', '1-wire',
-            'ds1990', 'ds1992', 'ds1993', 'maxim'
-        ],
-        'badusb': [
-            'badusb', 'bad-usb', 'rubber-ducky', 'ducky-script',
-            'hid-attack', 'usb-attack', 'payload', 'keystroke',
-            'digispark', 'teensy', 'bash-bunny'
-        ],
-        'app': [
-            'fap', 'flipper-app', 'flipper-application', 'flipper-plugin',
-            'flipper-tool', 'flipper-game', 'flipper-utility',
-            'fap-file', 'application-fam'
-        ],
-        'firmware': [
-            'firmware', 'custom-firmware', 'unleashed', 'roguemaster',
-            'momentum', 'xtreme', 'firmware-mod', 'ota', 'bootloader'
-        ],
-        'hardware': [
-            'gpio', 'uart', 'i2c', 'spi', 'usb', 'bluetooth', 'ble',
-            'wifi', 'esp32', 'cc1101', 'nrf24', 'lora'
-        ],
-        'security': [
-            'pentest', 'pentesting', 'redteam', 'security', 'hacking',
-            'exploit', 'vulnerability', 'infosec', 'cybersecurity'
-        ],
-        'dev': [
-            'sdk', 'api', 'library', 'framework', 'toolchain',
-            'debugging', 'ufbt', 'fbt', 'vscode', 'ide'
-        ]
-    }
-    
-    # ────────────────────────────────────────────────────────
-    # 2-TOPIC COMBINATIONS (alle Kategorien)
-    # ────────────────────────────────────────────────────────
-    
-    categories = list(topic_categories.keys())
-    
-    # Device + Everything
-    for device in topic_categories['device'][:3]:
-        for category, topics in topic_categories.items():
-            if category == 'device':
-                continue
-            for topic in topics[:5]:
-                all_queries.append(f"topic:{device} topic:{topic} archived:false")
-    
-    # Cross-Category (logische Paare)
-    logical_pairs = [
-        ('wireless', 'security'),
-        ('nfc', 'security'),
-        ('badusb', 'security'),
-        ('app', 'wireless'),
-        ('app', 'nfc'),
-        ('firmware', 'wireless'),
-        ('firmware', 'hardware'),
-        ('dev', 'app'),
-        ('infrared', 'hardware')
-    ]
-    
-    for cat1, cat2 in logical_pairs:
-        for topic1 in topic_categories[cat1][:3]:
-            for topic2 in topic_categories[cat2][:3]:
-                all_queries.append(f"topic:{topic1} topic:{topic2} archived:false")
-    
-    # ────────────────────────────────────────────────────────
-    # 3-TOPIC COMBINATIONS (hochspezifisch)
-    # ────────────────────────────────────────────────────────
-    
-    triple_combinations = [
-        ('device', 'app', 'wireless'),
-        ('device', 'firmware', 'wireless'),
-        ('device', 'app', 'nfc'),
-        ('device', 'badusb', 'security'),
-        ('device', 'infrared', 'hardware'),
-        ('app', 'wireless', 'security'),
-        ('firmware', 'hardware', 'dev')
-    ]
-    
-    for cat1, cat2, cat3 in triple_combinations:
-        topic1 = topic_categories[cat1][0]  # Main topic
-        for topic2 in topic_categories[cat2][:2]:
-            for topic3 in topic_categories[cat3][:2]:
-                query = f"topic:{topic1} topic:{topic2} topic:{topic3} archived:false"
-                all_queries.append(query)
-    
-    # ────────────────────────────────────────────────────────
-    # ADVANCED: Topic + Qualifiers
-    # ────────────────────────────────────────────────────────
-    
-    qualifiers = {
-        'language': ['C', 'Python', 'Rust', 'C++', 'JavaScript'],
-        'stars': ['>5', '>10', '>20', '>50', '>100', '>200'],
-        'forks': ['>1', '>5', '>10', '>20'],
-        'size': ['<100', '100..1000', '1000..5000', '>5000']
-    }
-    
-    main_topics = topic_categories['device'][:2]
-    
-    for main_topic in main_topics:
-        # Topic + Language
-        for lang in qualifiers['language']:
-            all_queries.append(f"topic:{main_topic} language:{lang} archived:false")
-        
-        # Topic + Stars
-        for stars in qualifiers['stars']:
-            all_queries.append(f"topic:{main_topic} stars:{stars} archived:false")
-        
-        # Topic + Language + Stars (Triple!)
-        for lang in qualifiers['language'][:3]:
-            for stars in qualifiers['stars'][:3]:
-                query = f"topic:{main_topic} language:{lang} stars:{stars} archived:false"
-                all_queries.append(query)
-    
-    # ────────────────────────────────────────────────────────
-    # NESTED AND/OR MEGA QUERIES
-    # ────────────────────────────────────────────────────────
-    
-    mega_queries = [
-        # Alle Wireless OR NFC mit Device
-        f"topic:flipperzero AND (topic:subghz OR topic:nfc OR topic:rfid OR topic:infrared) AND archived:false",
-        
-        # Apps mit verschiedenen Kategorien
-        f"(topic:flipper-app OR topic:fap) AND (topic:subghz OR topic:nfc OR topic:badusb) AND archived:false",
-        
-        # Firmware Variants
-        f"(topic:unleashed OR topic:roguemaster OR topic:momentum OR topic:xtreme) AND archived:false",
-        
-        # Security Tools
-        f"topic:flipperzero AND (topic:pentest OR topic:security OR topic:hacking) AND stars:>10 AND archived:false",
-        
-        # Development Tools
-        f"(topic:sdk OR topic:api OR topic:library) AND (topic:flipperzero OR topic:flipper) AND archived:false",
-        
-        # Hardware Projects
-        f"topic:flipper AND (topic:gpio OR topic:uart OR topic:i2c OR topic:esp32) AND archived:false",
-        
-        # Popular Multi-Topic
-        f"(topic:flipperzero OR topic:subghz OR topic:nfc) AND stars:>20 AND forks:>5 AND archived:false",
-        
-        # Recent Active
-        f"topic:flipperzero AND pushed:>2026-01-01 AND (stars:>10 OR forks:>3) AND archived:false",
-        
-        # Code Quality
-        f"topic:flipper AND (language:C OR language:Rust) AND stars:>50 AND archived:false",
-        
-        # All File Types
-        f"flipper AND (extension:fap OR extension:sub OR extension:nfc OR extension:ir) AND archived:false"
-    ]
-    
-    all_queries.extend(mega_queries)
-    
-    print(f"  ✅ Generated {len(all_queries)} intelligent topic queries!")
-    return all_queries
-
-# ═══════════════════════════════════════════════════════════
-# 3. GRAPHQL MEGA BATCH (50 Repos/Query)
-# ═══════════════════════════════════════════════════════════
-
-def graphql_mega_batch(repos: List[str], state: Dict) -> List[Dict]:
-    """
-    GraphQL Batch = 50 Repos in 1 Request!
-    Holt: Releases, Topics, Stats, Tags
-    """
-    print(f"\n🔥 GRAPHQL MEGA BATCH ({len(repos)} repos)...")
-    
-    all_data = []
-    
-    for batch_start in range(0, len(repos), 50):
-        batch = repos[batch_start:batch_start + 50]
-        
-        # Build Dynamic GraphQL Query
-        queries = []
-        for i, repo in enumerate(batch):
-            try:
-                owner, name = repo.split('/')
-                queries.append(f"""
-                r{i}: repository(owner: "{owner}", name: "{name}") {{
-                    nameWithOwner
-                    stargazerCount
-                    forkCount
-                    pushedAt
-                    createdAt
-                    
-                    repositoryTopics(first: 20) {{
-                        nodes {{
-                            topic {{ name }}
-                        }}
-                    }}
-                    
-                    releases(first: 5, orderBy: {{field: CREATED_AT, direction: DESC}}) {{
-                        nodes {{
-                            tagName
-                            name
-                            publishedAt
-                            url
-                            isPrerelease
-                        }}
-                    }}
-                    
-                    refs(refPrefix: "refs/tags/", first: 10, orderBy: {{field: TAG_COMMIT_DATE, direction: DESC}}) {{
-                        nodes {{
-                            name
-                            target {{
-                                ... on Commit {{
-                                    committedDate
-                                }}
-                            }}
-                        }}
-                    }}
-                    
-                    defaultBranchRef {{
-                        target {{
-                            ... on Commit {{
-                                history(first: 5) {{
-                                    nodes {{
-                                        message
-                                        committedDate
-                                    }}
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-                """)
-            except:
-                continue
-        
-        if not queries:
-            continue
-        
-        full_query = "query { " + "\n".join(queries) + " }"
-        
-        try:
-            resp = requests.post(
-                "https://api.github.com/graphql",
-                json={"query": full_query},
-                headers={**get_headers(), "Accept": "application/vnd.github.v4+json"},
-                timeout=30
-            )
-            
             if resp.status_code == 200:
-                data = resp.json().get('data', {})
+                data = resp.json()
+                total = data.get('total_count', 0)
+                items = data.get('items', [])
                 
-                for key, value in data.items():
-                    if value and value.get('nameWithOwner'):
-                        all_data.append(value)
+                new_repos = 0
+                for item in items:
+                    repo_name = item['full_name']
+                    if repo_name not in all_repos:
+                        all_repos.add(repo_name)
+                        new_repos += 1
                 
-                print(f"  ✅ Batch {batch_start//50 + 1}: {len(batch)} repos")
+                print(f"  [{i:2d}/{len(base_queries)}] {query[:50]:50s} → {new_repos:3d} neue | Total: {len(all_repos):4d}")
             
-            time.sleep(2)
-        
+            elif resp.status_code == 403:
+                print(f"  ⚠️ Rate Limit erreicht!")
+                break
+            
+            time.sleep(2)  # GitHub Best Practice
+            
         except Exception as e:
-            print(f"  ❌ Batch error: {e}")
+            print(f"  ❌ Error: {e}")
+            continue
     
-    print(f"  → {len(all_data)} repos with full data!")
-    return all_data
+    print(f"\n  ✅ GEFUNDEN: {len(all_repos)} unique repos!\n")
+    return all_repos
 
 # ═══════════════════════════════════════════════════════════
-# 4. TOPIC CO-OCCURRENCE ANALYSIS
+# RSS FEEDS (0 API CALLS!)
 # ═══════════════════════════════════════════════════════════
 
-def analyze_topic_patterns(graphql_data: List[Dict]) -> Dict:
+def check_rss_releases(repo: str, state: Dict) -> List[Dict]:
     """
-    Machine Learning-ähnliche Topic-Analyse:
-    - Welche Topics kommen oft zusammen vor?
-    - Welche Kombinationen sind am beliebtesten (Stars)?
+    RSS Feed Check = 0 API Calls!
+    Unbegrenzte Checks möglich!
     """
-    print("\n🧠 TOPIC PATTERN ANALYSIS...")
+    updates = []
+    feed_url = f"https://github.com/{repo}/releases.atom"
     
-    topic_pairs = defaultdict(lambda: {'count': 0, 'total_stars': 0, 'repos': []})
-    topic_triples = defaultdict(lambda: {'count': 0, 'total_stars': 0})
-    single_topics = defaultdict(lambda: {'count': 0, 'total_stars': 0})
-    
-    for repo_data in graphql_data:
-        repo_name = repo_data.get('nameWithOwner')
-        stars = repo_data.get('stargazerCount', 0)
+    try:
+        resp = requests.get(feed_url, timeout=8)
+        if resp.status_code != 200:
+            return []
         
-        topics = []
-        for topic_node in repo_data.get('repositoryTopics', {}).get('nodes', []):
-            topic_name = topic_node.get('topic', {}).get('name')
-            if topic_name:
-                topics.append(topic_name)
-                
-                # Single topic stats
-                single_topics[topic_name]['count'] += 1
-                single_topics[topic_name]['total_stars'] += stars
+        root = ET.fromstring(resp.content)
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
         
-        # Pairs
-        for i, topic1 in enumerate(topics):
-            for topic2 in topics[i+1:]:
-                pair = tuple(sorted([topic1, topic2]))
-                topic_pairs[pair]['count'] += 1
-                topic_pairs[pair]['total_stars'] += stars
-                topic_pairs[pair]['repos'].append(repo_name)
+        for entry in root.findall('atom:entry', ns)[:5]:  # Top 5 Releases
+            title_elem = entry.find('atom:title', ns)
+            link_elem = entry.find('atom:link', ns)
+            published_elem = entry.find('atom:published', ns)
+            
+            if title_elem is None or link_elem is None:
+                continue
+            
+            title = title_elem.text or ""
+            link = link_elem.get('href', '')
+            published = published_elem.text if published_elem is not None else ""
+            
+            # Extract tag from title (z.B. "Release v1.2.3" → "v1.2.3")
+            tag = title.split()[-1] if title else "unknown"
+            event_id = f"RSS:{repo}:{tag}"
+            
+            # Nur neue Events
+            if event_id not in state.get('posted_events', set()):
+                updates.append({
+                    'type': 'RELEASE',
+                    'repo': repo,
+                    'tag': tag,
+                    'title': title,
+                    'url': link,
+                    'time': published[:19].replace('T', ' ')
+                })
+                state.setdefault('posted_events', set()).add(event_id)
         
-        # Triples
-        for i, topic1 in enumerate(topics):
-            for j, topic2 in enumerate(topics[i+1:], i+1):
-                for topic3 in topics[j+1:]:
-                    triple = tuple(sorted([topic1, topic2, topic3]))
-                    topic_triples[triple]['count'] += 1
-                    topic_triples[triple]['total_stars'] += stars
+        time.sleep(0.1)  # Friendly rate limit
+        
+    except Exception as e:
+        pass  # Repo hat keine Releases
     
-    # Top Patterns
-    top_pairs = sorted(topic_pairs.items(), key=lambda x: x[1]['count'], reverse=True)[:20]
-    top_triples = sorted(topic_triples.items(), key=lambda x: x[1]['count'], reverse=True)[:10]
+    return updates
+
+def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
+    """RSS Check für alle Repos"""
+    print(f"\n📡 RSS RELEASE CHECK ({len(repos)} repos)...\n")
     
-    print("\n  🔥 TOP 20 TOPIC PAIRS:")
-    for (t1, t2), stats in top_pairs:
-        avg_stars = stats['total_stars'] / stats['count'] if stats['count'] > 0 else 0
-        print(f"     {t1} + {t2}: {stats['count']} repos, avg {int(avg_stars)} ⭐")
+    all_updates = []
     
-    print("\n  🔥 TOP 10 TOPIC TRIPLES:")
-    for (t1, t2, t3), stats in top_triples:
-        avg_stars = stats['total_stars'] / stats['count'] if stats['count'] > 0 else 0
-        print(f"     {t1} + {t2} + {t3}: {stats['count']} repos, avg {int(avg_stars)} ⭐")
+    for i, repo in enumerate(sorted(repos), 1):
+        updates = check_rss_releases(repo, state)
+        
+        if updates:
+            print(f"  [{i:4d}] 🆕 {repo:50s} → {len(updates)} releases")
+            all_updates.extend(updates)
+        
+        # Progress Update
+        if i % 100 == 0:
+            print(f"\n  📊 Progress: {i}/{len(repos)} repos checked, {len(all_updates)} updates\n")
+            time.sleep(1)
     
-    return {
-        'pairs': topic_pairs,
-        'triples': topic_triples,
-        'singles': single_topics
+    print(f"\n  ✅ RSS CHECK COMPLETE: {len(all_updates)} neue Releases!\n")
+    return all_updates
+
+# ═══════════════════════════════════════════════════════════
+# TELEGRAM INTEGRATION
+# ═══════════════════════════════════════════════════════════
+
+def post_to_telegram(update: Dict):
+    """Post Update to Telegram Channel"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL:
+        print("  ⚠️ Telegram nicht konfiguriert")
+        return False
+    
+    repo = update.get('repo', '')
+    tag = update.get('tag', 'unknown')
+    title = update.get('title', tag)
+    url = update.get('url', f"https://github.com/{repo}")
+    time_str = update.get('time', 'Jetzt')
+    
+    repo_url = f"https://github.com/{repo}"
+    
+    # Formatierte Nachricht
+    msg = f"""🚀 <b>NEUE RELEASE!</b>
+
+📦 <a href="{repo_url}">{repo}</a>
+🏷️ <code>{tag}</code>
+📝 {title}
+⏰ {time_str}
+
+<a href="{url}">📥 Release ansehen</a>"""
+    
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {
+        'chat_id': TELEGRAM_CHANNEL,
+        'text': msg,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': False
     }
+    
+    # Optional: Thread ID (wenn du Topics nutzt)
+    thread_id = os.environ.get("THREAD_ID", "")
+    if thread_id:
+        data['message_thread_id'] = int(thread_id)
+    
+    try:
+        resp = requests.post(api_url, json=data, timeout=10)
+        
+        if resp.status_code == 200:
+            print(f"  ✅ Telegram: {repo} - {tag}")
+            time.sleep(0.3)  # Avoid flood
+            return True
+        else:
+            print(f"  ❌ Telegram Error: {resp.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"  ❌ Telegram failed: {e}")
+        return False
 
 # ═══════════════════════════════════════════════════════════
-# MAIN MEGA SEARCH
+# STATE MANAGEMENT
+# ═══════════════════════════════════════════════════════════
+
+def load_state() -> Dict:
+    """Load persistent state"""
+    try:
+        with open(STATE_FILE, 'r') as f:
+            s = json.load(f)
+            # Convert lists back to sets
+            s['known_repos'] = set(s.get('known_repos', []))
+            s['posted_events'] = set(s.get('posted_events', []))
+            return s
+    except:
+        return {
+            'known_repos': set(),
+            'posted_events': set(),
+            'last_run': None
+        }
+
+def save_state(state: Dict):
+    """Save persistent state"""
+    try:
+        # Convert sets to lists for JSON
+        state_copy = state.copy()
+        state_copy['known_repos'] = sorted(list(state['known_repos']))
+        state_copy['posted_events'] = sorted(list(state['posted_events']))
+        state_copy['last_run'] = datetime.now(timezone.utc).isoformat()
+        
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state_copy, f, indent=2)
+        
+        print(f"  💾 State saved: {len(state['known_repos'])} repos, {len(state['posted_events'])} events")
+    except Exception as e:
+        print(f"  ⚠️ State save failed: {e}")
+
+# ═══════════════════════════════════════════════════════════
+# MAIN BOT
 # ═══════════════════════════════════════════════════════════
 
 def main():
-    state = {'known_repos': set(), 'posted_events': set()}
+    """Main Bot Execution"""
     
     print("=" * 70)
-    print("🚀 FLIPPER ZERO MEGA SEARCH v14.0 - ABSOLUTE MAXIMUM")
+    print("🎯 FLIPPER ZERO BOT v15.0 - OPTIMIZED & COMPLETE")
     print("=" * 70)
     
-    # RATE LIMIT CHECK
-    check_rate_limit()
+    # Load State
+    state = load_state()
+    print(f"\n📂 Loaded State: {len(state['known_repos'])} known repos, {len(state['posted_events'])} posted events")
     
-    # PHASE 1: Intelligent Topic Queries
-    print("\n📍 PHASE 1: INTELLIGENT TOPIC DISCOVERY...")
-    topic_queries = discover_topic_combinations(state)
+    # Rate Limit Check
+    if not check_rate_limit():
+        print("⚠️ Rate Limit zu niedrig - Abbruch")
+        return
     
-    all_repos = set()
+    # PHASE 1: Repository Discovery
+    print("\n" + "=" * 70)
+    print("PHASE 1: REPOSITORY DISCOVERY")
+    print("=" * 70)
     
-    # Execute first 50 queries with 1000-limit breaking
-    for i, query in enumerate(topic_queries[:50], 1):
-        print(f"\n[{i}/50] Query: {query[:60]}...")
-        repos = break_1000_limit_search(query)
-        all_repos.update(repos)
+    new_repos = optimized_search()
+    
+    # Merge with known repos
+    before_count = len(state['known_repos'])
+    state['known_repos'].update(new_repos)
+    after_count = len(state['known_repos'])
+    new_count = after_count - before_count
+    
+    print(f"\n📊 Repository Stats:")
+    print(f"   Neu gefunden: {new_count}")
+    print(f"   Gesamt bekannt: {after_count}")
+    
+    # PHASE 2: RSS Release Check
+    print("\n" + "=" * 70)
+    print("PHASE 2: RSS RELEASE CHECK (0 API!)")
+    print("=" * 70)
+    
+    all_updates = check_all_rss(state['known_repos'], state)
+    
+    # PHASE 3: Telegram Posting
+    if all_updates:
+        print("\n" + "=" * 70)
+        print(f"PHASE 3: TELEGRAM POSTING ({len(all_updates)} updates)")
+        print("=" * 70 + "\n")
         
-        if i % 5 == 0:
-            print(f"\n  📊 Progress: {len(all_repos)} total repos found")
-            time.sleep(5)
+        posted = 0
+        for update in all_updates[:50]:  # Max 50 pro Run
+            if post_to_telegram(update):
+                posted += 1
+        
+        print(f"\n  ✅ Posted {posted}/{len(all_updates)} updates to Telegram")
+    else:
+        print("\n  ℹ️ Keine neuen Updates zum Posten")
     
-    # PHASE 2: GraphQL Mega Batch
-    print(f"\n📍 PHASE 2: GRAPHQL MEGA BATCH...")
-    graphql_data = graphql_mega_batch(list(all_repos)[:500], state)
+    # Save State
+    print("\n" + "=" * 70)
+    save_state(state)
     
-    # PHASE 3: Topic Pattern Analysis
-    print(f"\n📍 PHASE 3: TOPIC PATTERN ANALYSIS...")
-    patterns = analyze_topic_patterns(graphql_data)
-    
-    # PHASE 4: Generate new queries based on patterns
-    print(f"\n📍 PHASE 4: PATTERN-BASED DISCOVERY...")
-    
-    new_queries = []
-    for (t1, t2), stats in list(patterns['pairs'].items())[:30]:
-        if stats['count'] >= 3:  # Mindestens 3x gesehen
-            new_queries.append(f"topic:{t1} topic:{t2} archived:false")
-    
-    # Execute pattern-based queries
-    for query in new_queries[:20]:
-        repos = break_1000_limit_search(query)
-        all_repos.update(repos)
-    
-    state['known_repos'] = all_repos
-    
-    print(f"\n{'='*70}")
-    print(f"✅ MEGA SEARCH COMPLETE!")
-    print(f"   Total Repos: {len(all_repos)}")
-    print(f"   Queries Executed: {len(topic_queries[:50]) + len(new_queries[:20])}")
-    print(f"   Unique Topics Found: {len(patterns['singles'])}")
-    print(f"{'='*70}\n")
+    # Final Summary
+    print("\n" + "=" * 70)
+    print("✅ BOT RUN COMPLETE!")
+    print("=" * 70)
+    print(f"   Known Repos: {len(state['known_repos'])}")
+    print(f"   New Releases Found: {len(all_updates)}")
+    print(f"   Posted to Telegram: {min(len(all_updates), 50)}")
+    print(f"   Total Events Tracked: {len(state['posted_events'])}")
+    print("=" * 70 + "\n")
 
 if __name__ == "__main__":
     main()
