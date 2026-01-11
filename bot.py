@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import requests
 import os
 import json
@@ -8,14 +7,47 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Set
 from collections import defaultdict
 
+# ═══════════════════════════════════════════════════════════
+# KONFIGURATION
+# ═══════════════════════════════════════════════════════════
+
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = "/tmp/flipper_mega_state.json"
 
 def get_headers():
+    """Headers mit Token"""
     h = {"Accept": "application/vnd.github.v3+json"}
     if GITHUB_TOKEN:
         h["Authorization"] = f"token {GITHUB_TOKEN}"
     return h
+
+def check_rate_limit():
+    """Prüfe Rate Limit Status"""
+    try:
+        resp = requests.get("https://api.github.com/rate_limit", headers=get_headers(), timeout=10)
+        data = resp.json()
+        
+        core = data['resources']['core']
+        search = data['resources']['search']
+        
+        print(f"\n{'='*70}")
+        print(f"📊 RATE LIMIT STATUS:")
+        print(f"   Core API: {core['remaining']}/{core['limit']} remaining")
+        print(f"   Search API: {search['remaining']}/{search['limit']} remaining")
+        
+        if core['limit'] == 5000:
+            print(f"   ✅ TOKEN FUNKTIONIERT! (5000/h)")
+        elif core['limit'] == 60:
+            print(f"   ⚠️ KEIN TOKEN - nur 60/h")
+        else:
+            print(f"   ℹ️ Limit: {core['limit']}/h")
+        
+        print(f"{'='*70}\n")
+        
+        return core['remaining'] > 50
+    except Exception as e:
+        print(f"⚠️ Rate Limit Check failed: {e}")
+        return True
 
 # ═══════════════════════════════════════════════════════════
 # 1. 1000-RESULT-LIMIT WORKAROUND (Date + Size Slicing)
@@ -493,12 +525,12 @@ def analyze_topic_patterns(graphql_data: List[Dict]) -> Dict:
     
     print("\n  🔥 TOP 20 TOPIC PAIRS:")
     for (t1, t2), stats in top_pairs:
-        avg_stars = stats['total_stars'] / stats['count']
+        avg_stars = stats['total_stars'] / stats['count'] if stats['count'] > 0 else 0
         print(f"     {t1} + {t2}: {stats['count']} repos, avg {int(avg_stars)} ⭐")
     
     print("\n  🔥 TOP 10 TOPIC TRIPLES:")
     for (t1, t2, t3), stats in top_triples:
-        avg_stars = stats['total_stars'] / stats['count']
+        avg_stars = stats['total_stars'] / stats['count'] if stats['count'] > 0 else 0
         print(f"     {t1} + {t2} + {t3}: {stats['count']} repos, avg {int(avg_stars)} ⭐")
     
     return {
@@ -517,6 +549,9 @@ def main():
     print("=" * 70)
     print("🚀 FLIPPER ZERO MEGA SEARCH v14.0 - ABSOLUTE MAXIMUM")
     print("=" * 70)
+    
+    # RATE LIMIT CHECK
+    check_rate_limit()
     
     # PHASE 1: Intelligent Topic Queries
     print("\n📍 PHASE 1: INTELLIGENT TOPIC DISCOVERY...")
