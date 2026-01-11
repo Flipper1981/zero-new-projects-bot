@@ -13,7 +13,8 @@ import xml.etree.ElementTree as ET
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHANNEL = os.environ.get("CHANNEL_ID", "")
-STATE_FILE = "/tmp/flipper_v15_state.json"
+TOPIC_ID = os.environ.get("TOPIC_ID", "")  # v14 Kompatibilität!
+STATE_FILE = "flipper_v15_state.json"  # Im Repo Root (bleibt erhalten)
 
 # WICHTIG: Nur Releases der letzten X Tage posten
 RELEASE_AGE_DAYS = int(os.environ.get("RELEASE_AGE_DAYS", "90"))  # Default: 90 Tage
@@ -233,7 +234,6 @@ def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
         print(f"\n📡 RSS RELEASE CHECK ({len(repos)} repos, letzte {RELEASE_AGE_DAYS} Tage)...\n")
     
     all_updates = []
-    old_skipped = 0
     
     for i, repo in enumerate(sorted(repos), 1):
         updates = check_rss_releases(repo, state, first_run)
@@ -261,17 +261,6 @@ def check_all_rss(repos: Set[str], state: Dict) -> List[Dict]:
 def group_updates_by_repo(updates: List[Dict]) -> Dict[str, List[Dict]]:
     """
     Gruppiert Updates nach Repository
-    
-    Beispiel:
-    Input:  [
-        {repo: "A", tag: "v2"},
-        {repo: "A", tag: "v1"},
-        {repo: "B", tag: "v1"}
-    ]
-    Output: {
-        "A": [{tag: "v2"}, {tag: "v1"}],  # Sortiert: neueste zuerst
-        "B": [{tag: "v1"}]
-    }
     """
     grouped = {}
     
@@ -288,7 +277,7 @@ def group_updates_by_repo(updates: List[Dict]) -> Dict[str, List[Dict]]:
     return grouped
 
 # ═══════════════════════════════════════════════════════════
-# TELEGRAM - GROUPED POSTS
+# TELEGRAM - GROUPED POSTS MIT TOPIC_ID SUPPORT!
 # ═══════════════════════════════════════════════════════════
 
 def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
@@ -370,11 +359,11 @@ def post_repo_updates_to_telegram(repo: str, updates: List[Dict]) -> bool:
         'disable_web_page_preview': False
     }
     
-    # Optional: Thread ID
-    thread_id = os.environ.get("THREAD_ID", "")
-    if thread_id:
+    # WICHTIG: TOPIC_ID Support (v14 Kompatibilität!)
+    topic_id = TOPIC_ID or os.environ.get("THREAD_ID", "")
+    if topic_id:
         try:
-            data['message_thread_id'] = int(thread_id)
+            data['message_thread_id'] = int(topic_id)
         except:
             pass
     
@@ -459,7 +448,7 @@ def main():
     """Main Bot Execution"""
     
     print("=" * 70)
-    print("🎯 FLIPPER ZERO BOT v15.2 FINAL - FULLY OPTIMIZED")
+    print("🎯 FLIPPER ZERO BOT v15.2 FINAL - TOPIC_ID SUPPORT")
     print("=" * 70)
     
     # Validate Config
@@ -474,6 +463,11 @@ def main():
     if not TELEGRAM_CHANNEL.startswith("-100"):
         print(f"⚠️ WARNUNG: CHANNEL_ID sollte mit -100 starten!")
         print(f"   Aktuell: {TELEGRAM_CHANNEL}\n")
+    
+    # Zeige TOPIC_ID wenn gesetzt
+    if TOPIC_ID:
+        print(f"  ℹ️ TOPIC_ID gesetzt: {TOPIC_ID}")
+        print(f"  ℹ️ Posts gehen ins Topic/Thread!\n")
     
     # Load State
     state = load_state()
@@ -545,10 +539,11 @@ def main():
         )
         
         # Zeige Top 10 Repos mit meisten Releases
-        print(f"  🔝 Top Repos mit meisten Releases:")
-        for repo, updates in sorted_repos[:10]:
-            print(f"     {repo:50s} → {len(updates)} releases")
-        print()
+        if len(sorted_repos) > 0:
+            print(f"  🔝 Top Repos mit meisten Releases:")
+            for repo, updates in sorted_repos[:10]:
+                print(f"     {repo:50s} → {len(updates)} releases")
+            print()
         
         # BATCH: Max 20 REPOS/run
         BATCH_SIZE = 20
